@@ -1,0 +1,30 @@
+{
+  "name": "companion-module-showcall",
+  "version": "1.0.0",
+  "api_version": "1.0.0",
+  "keywords": [
+    "Video",
+    "Resolume"
+  ],
+  "manufacturer": "ShowCall",
+  "product": "ShowCall",
+  "shortname": "showcall",
+  "description": "Control ShowCall Resolume integration via Stream Deck",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Trevor Marr",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/trevormarr/showcall-companion.git"
+  },
+  "bugs": {
+    "url": "https://github.com/trevormarr/showcall-companion/issues"
+  },
+  "homepage": "https://github.com/trevormarr/showcall-companion",
+  "dependencies": {
+    "ws": "^8.18.3"
+  }
+}

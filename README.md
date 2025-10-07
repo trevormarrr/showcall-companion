@@ -1,11 +1,11 @@
-# ShowCall Companion Module
+# companion-module-showcall
 
-A Companion module for controlling ShowCall's Resolume integration via Stream Deck.
+Professional Stream Deck control for ShowCall's Resolume integration.
 
 ## Features
 
 - **Clip Control**: Trigger individual clips by layer and column
-- **Column Control**: Trigger entire columns
+- **Column Control**: Trigger entire columns  
 - **Transport**: Cut to Program, Clear All
 - **Macro Support**: Execute custom ShowCall macros
 - **Visual Feedback**: See which clips are currently active
@@ -13,87 +13,40 @@ A Companion module for controlling ShowCall's Resolume integration via Stream De
 
 ## Installation
 
-1. Copy this module to your Companion modules directory
-2. Restart Companion
-3. Add a new ShowCall instance
-4. Configure the host/port to match your ShowCall server
+### Method 1: Manual Installation (Recommended)
+1. Download this module as a ZIP file from GitHub
+2. Extract to your Companion modules directory:
+   - **Windows**: `%APPDATA%/companion-modules/`
+   - **macOS**: `~/Documents/companion-modules/`
+   - **Linux**: `~/.companion-modules/`
+3. Restart Companion
+4. Add a new ShowCall instance
+
+### Method 2: Development Installation
+```bash
+git clone https://github.com/trevormarr/showcall-companion.git
+cd showcall-companion
+npm install
+# Copy to your Companion modules directory
+```
 
 ## Configuration
 
-- **Host**: IP address or hostname where ShowCall is running (default: localhost)
-- **Port**: Port number of ShowCall server (default: 3200)
+- **Host**: IP address where ShowCall is running (default: localhost)
+- **Port**: ShowCall server port (default: 3200)
 
-## Actions
+## Requirements
 
-### Trigger Clip
-Triggers a specific clip by layer and column number.
-- **Layer**: 1-8
-- **Column**: 1-32
+- ShowCall v1.5.0 or later with WebSocket support
+- Companion v3.0+
+- Network connectivity to ShowCall server
 
-### Trigger Column
-Triggers all clips in a specific column.
-- **Column**: 1-32
+## Support
 
-### Cut to Program
-Executes a cut operation (Resolume's tempo resync).
-
-### Clear All
-Disconnects all clips.
-
-### Execute Macro
-Runs a custom ShowCall macro by ID.
-
-## Feedbacks
-
-### Clip Active
-Shows when a specific clip is active in the program output.
-
-### Connection Status
-Indicates whether the module is connected to ShowCall.
-
-## Variables
-
-- `connection_status`: Connected/Disconnected
-- `bpm`: Current BPM from Resolume
-- `program_clips`: Number of active clips
-- `program_clip_names`: Names of active clips
-
-## Presets
-
-The module includes presets for:
-- Basic transport controls (Cut, Clear All)
-- Individual clip triggers for layers 1-4, columns 1-8
-- Column triggers for columns 1-8
-
-## Protocol
-
-This module communicates with ShowCall via WebSocket at `/api/companion`. Commands are sent as JSON messages:
-
-```json
-{
-  "command": "trigger_clip",
-  "layer": 1,
-  "column": 2
-}
-```
-
-Status updates are received automatically:
-
-```json
-{
-  "type": "status",
-  "data": {
-    "connected": true,
-    "program": [{"layer": 1, "column": 2, "clipName": "Clip Name"}],
-    "bpm": 120
-  }
-}
-```
-
-## Development
-
-This module requires ShowCall version 1.0+ with Companion WebSocket support enabled.
+For help and documentation, see [HELP.md](./companion/HELP.md) or visit:
+- GitHub Issues: https://github.com/trevormarr/showcall-companion/issues
+- ShowCall Repository: https://github.com/trevormarrr/showcall
 
 ## License
 
-MIT# showcall-companion
+MIT - See [LICENSE](./LICENSE)
