@@ -13,7 +13,7 @@
     "url": "git+https://github.com/trevormarr/showcall-companion.git"
   },
   "dependencies": {
-    "@companion-module/base": "^1.12.0",
+    "@companion-module/base": "~1.8.0",
     "ws": "^8.18.3"
   },
   "author": "Trevor Marr",
