@@ -13,22 +13,35 @@ Professional Stream Deck control for ShowCall's Resolume integration.
 
 ## Installation
 
-### Method 1: Manual Installation (Recommended)
-1. Download this module as a ZIP file from GitHub
-2. Extract to your Companion modules directory:
-   - **Windows**: `%APPDATA%/companion-modules/`
-   - **macOS**: `~/Documents/companion-modules/`
-   - **Linux**: `~/.companion-modules/`
-3. Restart Companion
-4. Add a new ShowCall instance
+### Method 1: Using Companion Developer Modules (Recommended)
 
-### Method 2: Development Installation
-```bash
-git clone https://github.com/trevormarr/showcall-companion.git
-cd showcall-companion
-npm install
-# Copy to your Companion modules directory
-```
+1. **Download Module**:
+   - Go to https://github.com/trevormarr/showcall-companion
+   - Click "Code" → "Download ZIP"
+   - Extract the ZIP file
+
+2. **Setup Developer Modules in Companion**:
+   - Open Companion
+   - In the launcher window, click the **cog icon** in the top right corner
+   - Click "Select" next to "Developer modules path"
+   - Choose or create a folder (e.g., `companion-modules-dev`)
+   - Copy the extracted `showcall-companion` folder into this directory
+
+3. **Launch Companion**:
+   - Click "Launch GUI" in the Companion launcher
+   - The ShowCall module should appear in the connections list
+
+4. **Add ShowCall Connection**:
+   - Go to "Connections" tab
+   - Click "Add Connection"
+   - Find "ShowCall" in the list
+   - Configure host/port settings
+
+### Method 2: Manual Installation (Alternative)
+If you prefer the traditional approach:
+- Copy module to your system's modules directory
+- **Windows**: Place in modules folder accessible to Companion
+- **macOS/Linux**: Follow Companion's module loading documentation
 
 ## Configuration
 
