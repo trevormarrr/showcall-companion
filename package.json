@@ -1,6 +1,10 @@
 {
   "name": "companion-module-showcall",
   "version": "1.0.0",
+  "api_version": "1.0.0",
+  "manufacturer": "ShowCall",
+  "product": "ShowCall",
+  "shortname": "showcall",
   "main": "main.js",
   "scripts": {
     "format": "prettier -w ."
