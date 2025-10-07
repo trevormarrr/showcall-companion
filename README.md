@@ -2,6 +2,28 @@
 
 Control ShowCall's Resolume integration directly from Stream Deck via Bitfocus Companion.
 
+## 🎯 Latest Updates
+
+### ✅ **Enhanced Feedbacks & Visual States**
+- **Clip Active**: Red background when specific clips are active
+- **Layer Status**: Yellow background when any clips are active in a layer  
+- **Column Status**: Orange background when any clips are active in a column
+- **Connection Status**: Green background when connected to ShowCall
+- **Any Clips Active**: Purple background when any clips are running
+- **BPM Range**: Green background when BPM is within specified range
+
+### ✅ **Macro Support** 
+- Execute ShowCall macros by ID (walkin, sermon, baptism, closing)
+- Pre-built macro presets with color-coded buttons
+- Full integration with ShowCall's preset system
+
+### ✅ **Comprehensive Presets**
+- Individual clip triggers (L1-L4, C1-C8) with active state feedback
+- Column triggers (C1-C8) with activity feedback
+- Layer status indicators (L1-L8) 
+- Basic controls (Cut, Clear All) with connection status
+- Scene macro buttons (Walk-In, Sermon, Baptism, Closing)
+
 ## Quick Installation
 
 ### Prerequisites
