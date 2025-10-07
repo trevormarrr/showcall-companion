@@ -1,7 +1,7 @@
 {
   "name": "companion-module-showcall",
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "index.js",
   "license": "MIT",
   "keywords": [
     "Video",
