@@ -1,65 +1,47 @@
-# companion-module-showcall
+# ShowCall Companion Module
 
-Professional Stream Deck control for ShowCall's Resolume integration.
+Control ShowCall's Resolume integration directly from Stream Deck via Bitfocus Companion.
 
-## Features
+## Quick Installation
 
-- **Clip Control**: Trigger individual clips by layer and column
-- **Column Control**: Trigger entire columns  
-- **Transport**: Cut to Program, Clear All
-- **Macro Support**: Execute custom ShowCall macros
-- **Visual Feedback**: See which clips are currently active
-- **Real-time Status**: Connection status and BPM display
+### Prerequisites
+- Node.js 18.12+ installed ([Download here](https://nodejs.org/))
+- Bitfocus Companion installed
+- ShowCall v1.5.0+ running
 
-## Installation
+### Automated Installation
+1. Download this repository (Code → Download ZIP or `git clone`)
+2. **Windows**: Double-click `install.bat`
+3. **Mac/Linux**: Run `./install.sh` in terminal
+4. Follow the on-screen instructions
 
-### Method 1: Using Companion Developer Modules (Recommended)
+### Manual Installation
+```bash
+# 1. Download/clone this repository
+git clone https://github.com/trevormarrr/showcall-companion.git
+cd showcall-companion
 
-1. **Download Module**:
-   - Go to https://github.com/trevormarr/showcall-companion
-   - Click "Code" → "Download ZIP"
-   - Extract the ZIP file
+# 2. Install dependencies (REQUIRED!)
+npm install
 
-2. **Setup Developer Modules in Companion**:
-   - Open Companion
-   - In the launcher window, click the **cog icon** in the top right corner
-   - Click "Select" next to "Developer modules path"
-   - Choose or create a folder (e.g., `companion-modules-dev`)
-   - Copy the extracted `showcall-companion` folder into this directory
+# 3. Add to Companion:
+# - Open Companion Settings → Developer modules
+# - Add this folder
+# - Restart Companion
+# - Add ShowCall connection
+```
 
-3. **Launch Companion**:
-   - Click "Launch GUI" in the Companion launcher
-   - The ShowCall module should appear in the connections list
+## Troubleshooting the "Cannot find module" Error
 
-4. **Add ShowCall Connection**:
-   - Go to "Connections" tab
-   - Click "Add Connection"
-   - Find "ShowCall" in the list
-   - Configure host/port settings
+If you see: `Failed to get module api version: Error: Cannot find module '@companion-module/base/package.json'`
 
-### Method 2: Manual Installation (Alternative)
-If you prefer the traditional approach:
-- Copy module to your system's modules directory
-- **Windows**: Place in modules folder accessible to Companion
-- **macOS/Linux**: Follow Companion's module loading documentation
+**Solution**: You need to run `npm install` in the module folder BEFORE adding it to Companion.
 
-## Configuration
+**Why**: The module depends on `@companion-module/base` which must be installed locally. Companion doesn't automatically install npm dependencies for developer modules.
 
-- **Host**: IP address where ShowCall is running (default: localhost)
-- **Port**: ShowCall server port (default: 3200)
-
-## Requirements
-
-- ShowCall v1.5.0 or later with WebSocket support
-- Companion v3.0+
-- Network connectivity to ShowCall server
-
-## Support
-
-For help and documentation, see [HELP.md](./companion/HELP.md) or visit:
-- GitHub Issues: https://github.com/trevormarr/showcall-companion/issues
-- ShowCall Repository: https://github.com/trevormarrr/showcall
-
-## License
-
-MIT - See [LICENSE](./LICENSE)
+**Steps**:
+1. Download the module
+2. Open terminal/command prompt in the module folder  
+3. Run: `npm install`
+4. Wait for completion
+5. Then add to Companion as developer module

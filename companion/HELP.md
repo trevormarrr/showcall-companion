@@ -2,20 +2,35 @@
 
 This module provides comprehensive control of ShowCall's Resolume integration via Stream Deck.
 
-### Installation
+### Installation Instructions
 
-**Step 1: Download Module**
-- Download from: https://github.com/trevormarrr/showcall-companion
-- Or clone: `git clone https://github.com/trevormarrr/showcall-companion.git`
+### Step 1: Start ShowCall with WebSocket Support
+1. Make sure you have ShowCall v1.5.0 or later
+2. Start ShowCall - it will automatically start the WebSocket server for Companion integration
 
-**Step 2: Install in Companion**
-1. Open Bitfocus Companion
-2. Click the **Settings** (cog/gear) icon in the top-right
-3. Select **Developer modules** from the sidebar
+### Step 2: Install the Module in Companion
+
+### Requirements Before Installation
+
+**Node.js**: You need Node.js installed on your system to run `npm install`
+- Download from: https://nodejs.org/
+- Minimum version: 18.12 or higher
+- Companion requires Node.js to run modules with dependencies
+
+**IMPORTANT: Install Dependencies First**
+1. Download or clone this repository: `https://github.com/trevormarrr/showcall-companion`
+2. Open a terminal/command prompt in the module folder
+3. Run: `npm install` (this installs required dependencies)
+4. Wait for installation to complete
+
+**Method 1: Developer Module (Recommended)**
+1. After npm install completes, open Bitfocus Companion
+2. Click the **Settings** (cog) icon in the top-right corner
+3. Go to the **Developer modules** section
 4. Click **Add module**
-5. Browse to and select the `showcall-companion` folder
+5. Select the folder containing this module (should contain `main.js`, `manifest.json`, `node_modules`, etc.)
 6. Click **Save**
-7. **IMPORTANT**: Completely restart Companion (close and reopen)
+7. **Restart Companion completely** (close and reopen the application)
 
 **Step 3: Add Connection**
 1. In Companion, click **Connections** in the sidebar
