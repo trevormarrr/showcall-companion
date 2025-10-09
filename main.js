@@ -94,6 +94,14 @@ class ShowCallInstance extends InstanceBase {
 			this.sendCommand('get_status')
 			this.sendCommand('get_composition')
 			
+			// TESTING: Also try alternative status request formats
+			this.sendCommand('status')
+			this.sendCommand('get_state')
+			this.sendCommand('get_clips')
+			
+			// Log connection details for debugging
+			this.log('info', `Connected to ShowCall WebSocket at ${wsUrl}`)
+			
 			// Check feedbacks immediately on connection
 			this.checkFeedbacks()
 		})
@@ -145,51 +153,116 @@ class ShowCallInstance extends InstanceBase {
 	sendCommand(action, params = {}) {
 		if (this.ws && this.ws.readyState === WebSocket.OPEN) {
 			const message = { action, ...params }
-			this.ws.send(JSON.stringify(message))
+			const messageStr = JSON.stringify(message)
+			this.log('info', `Sending command to ShowCall: ${messageStr}`)
+			this.ws.send(messageStr)
 		} else {
-			this.log('warn', 'Cannot send command - not connected to ShowCall')
+			this.log('warn', `Cannot send command '${action}' - not connected to ShowCall. WebSocket state: ${this.ws ? this.ws.readyState : 'null'}`)
 		}
 	}
 
 	handleMessage(message) {
 		this.lastStatusUpdate = Date.now()
 		
-		if (message.type === 'status') {
-			// Deep merge the status data
-			this.status = { ...this.status, ...message.data }
-			this.updateClipStates()
-			this.updateVariables()
-			this.checkFeedbacks()
+		// DEBUG: Log all incoming messages to understand ShowCall's data format
+		this.log('info', `ShowCall Message Received: ${JSON.stringify(message, null, 2)}`)
+		
+		if (message.type === 'status' || message.type === 'status_update') {
+			// DEBUG: Log the current status before and after update
+			this.log('info', `Processing ${message.type} message`)
+			
+			// Handle ShowCall's actual data format
+			if (message.data) {
+				// Update connection status
+				this.status.connected = message.data.connected || false
+				
+				// Update BPM
+				this.status.bpm = message.data.bpm || 120
+				
+				// Update composition info
+				if (message.data.comp) {
+					this.status.composition = {
+						...this.status.composition,
+						name: message.data.comp
+					}
+				}
+				
+				// Convert ShowCall's programClips to our expected format
+				if (message.data.programClips && Array.isArray(message.data.programClips)) {
+					this.status.program = message.data.programClips.map(clip => ({
+						layer: clip.layer,
+						column: clip.column,
+						clipName: clip.clipName || '',
+						layerName: clip.layerName || '',
+						opacity: clip.opacity || 1.0,
+						volume: clip.volume || 1.0,
+						position: clip.position || 0,
+						duration: clip.duration || 0
+					}))
+				} else {
+					this.status.program = []
+				}
+				
+				// Store additional ShowCall data
+				this.status.showCallData = {
+					program: message.data.program || {},
+					preview: message.data.preview || {},
+					host: message.data.host || 'unknown',
+					restPort: message.data.restPort || '8080',
+					oscPort: message.data.oscPort || '7000',
+					timestamp: message.data.timestamp || Date.now()
+				}
+				
+				this.log('info', `Processed ${this.status.program.length} clips from ShowCall`)
+				
+				this.updateClipStates()
+				this.updateVariables()
+				this.checkFeedbacks()
+			}
 		} else if (message.type === 'composition') {
 			this.status.composition = { ...this.status.composition, ...message.data }
-			this.log('debug', `Composition updated: ${message.data.name || 'Unknown'} (${message.data.columns}x${message.data.layers})`)
+			this.log('info', `Composition updated: ${JSON.stringify(message.data, null, 2)}`)
 		} else if (message.type === 'response') {
 			this.log('debug', `Command response: ${message.message}`)
 		} else if (message.type === 'error') {
 			this.log('error', `ShowCall error: ${message.message}`)
 		} else if (message.type === 'clip_triggered') {
 			// Handle real-time clip trigger notifications
-			this.log('debug', `Clip triggered: Layer ${message.layer}, Column ${message.column}`)
+			this.log('info', `Clip triggered: Layer ${message.layer}, Column ${message.column}`)
 			this.checkFeedbacks()
 		} else if (message.type === 'column_triggered') {
 			// Handle real-time column trigger notifications
-			this.log('debug', `Column triggered: ${message.column}`)
+			this.log('info', `Column triggered: ${message.column}`)
 			this.checkFeedbacks()
+		} else {
+			// Log unhandled message types
+			this.log('warn', `Unknown message type: ${message.type}, data: ${JSON.stringify(message, null, 2)}`)
 		}
 	}
 
 	updateClipStates() {
+		// DEBUG: Log the program data being processed
+		this.log('info', `updateClipStates - Processing program: ${JSON.stringify(this.status.program, null, 2)}`)
+		
 		// Reset all states
 		this.status.layers = {}
 		this.status.columns = {}
 		this.status.clips = {}
 
-		// Process active clips in program
+		// Process active clips in program - safely handle missing/invalid data
 		if (this.status.program && Array.isArray(this.status.program)) {
-			this.status.program.forEach(clip => {
+			this.status.program.forEach((clip, index) => {
+				// Validate clip data
+				if (!clip || typeof clip.layer === 'undefined' || typeof clip.column === 'undefined') {
+					this.log('warn', `Invalid clip data at index ${index}: ${JSON.stringify(clip)}`)
+					return
+				}
+				
 				const layer = clip.layer
 				const column = clip.column
 				const clipKey = `${layer}-${column}`
+
+				this.log('debug', `Processing clip ${clipKey}: ${JSON.stringify(clip)}`)
 
 				// Track individual clips
 				this.status.clips[clipKey] = {
@@ -215,7 +288,12 @@ class ShowCallInstance extends InstanceBase {
 				}
 				this.status.columns[column].clips.push(clipKey)
 			})
+		} else {
+			this.log('warn', `Invalid or missing program data. Expected array, got: ${typeof this.status.program}`)
 		}
+		
+		// DEBUG: Log final states
+		this.log('info', `Final clip states - Clips: ${Object.keys(this.status.clips).length}, Layers: ${Object.keys(this.status.layers).length}, Columns: ${Object.keys(this.status.columns).length}`)
 	}
 
 	clearAllStates() {
@@ -435,6 +513,19 @@ class ShowCallInstance extends InstanceBase {
 				callback: async () => {
 					this.sendCommand('get_composition')
 					this.sendCommand('get_status')
+				}
+			},
+			refresh_status: {
+				name: 'Refresh Status (Debug)',
+				options: [],
+				callback: async () => {
+					this.log('info', 'Manual status refresh requested')
+					this.sendCommand('get_status')
+					this.sendCommand('get_composition')
+					this.sendCommand('status')
+					this.sendCommand('get_state')
+					this.sendCommand('get_clips')
+					this.log('info', `Current internal status: ${JSON.stringify(this.status, null, 2)}`)
 				}
 			}
 		})
@@ -749,7 +840,12 @@ class ShowCallInstance extends InstanceBase {
 			{ variableId: 'layer_5_status', name: 'Layer 5 Status' },
 			{ variableId: 'layer_6_status', name: 'Layer 6 Status' },
 			{ variableId: 'layer_7_status', name: 'Layer 7 Status' },
-			{ variableId: 'layer_8_status', name: 'Layer 8 Status' }
+			{ variableId: 'layer_8_status', name: 'Layer 8 Status' },
+			// ShowCall specific variables
+			{ variableId: 'current_program_clip', name: 'Current Program Clip' },
+			{ variableId: 'current_preview_clip', name: 'Current Preview Clip' },
+			{ variableId: 'showcall_host', name: 'ShowCall Host' },
+			{ variableId: 'showcall_timestamp', name: 'Last Update Time' }
 		])
 
 		this.setVariableValues({
@@ -770,17 +866,24 @@ class ShowCallInstance extends InstanceBase {
 			layer_5_status: 'Inactive',
 			layer_6_status: 'Inactive',
 			layer_7_status: 'Inactive',
-			layer_8_status: 'Inactive'
+			layer_8_status: 'Inactive',
+			current_program_clip: 'None',
+			current_preview_clip: 'None',
+			showcall_host: 'Unknown',
+			showcall_timestamp: 'Never'
 		})
 	}
 
 	updateVariables() {
-		const clipNames = this.status.program.map(clip => 
+		// Safely handle program data
+		const program = Array.isArray(this.status.program) ? this.status.program : []
+		
+		const clipNames = program.map(clip => 
 			clip.clipName ? `L${clip.layer}C${clip.column}:${clip.clipName}` : `L${clip.layer}C${clip.column}`
 		).join(', ')
 		
-		const activeLayerCount = Object.keys(this.status.layers).length
-		const activeColumnCount = Object.keys(this.status.columns).length
+		const activeLayerCount = Object.keys(this.status.layers || {}).length
+		const activeColumnCount = Object.keys(this.status.columns || {}).length
 		
 		// Calculate uptime
 		const uptimeMs = this.status.connected ? Date.now() - this.lastStatusUpdate : 0
@@ -790,23 +893,49 @@ class ShowCallInstance extends InstanceBase {
 		// Update layer status variables
 		const layerVariables = {}
 		for (let i = 1; i <= 8; i++) {
-			const layerActive = this.status.layers[i]?.active
-			const clipCount = this.status.layers[i]?.clips?.length || 0
+			const layerActive = this.status.layers?.[i]?.active
+			const clipCount = this.status.layers?.[i]?.clips?.length || 0
 			layerVariables[`layer_${i}_status`] = layerActive ? `Active (${clipCount})` : 'Inactive'
 		}
 		
-		this.setVariableValues({
+		// ShowCall specific data
+		const showCallData = this.status.showCallData || {}
+		const currentProgram = showCallData.program || {}
+		const currentPreview = showCallData.preview || {}
+		
+		const programClipDisplay = currentProgram.clipName && currentProgram.clipName !== '—' 
+			? `L${currentProgram.layer}C${currentProgram.column}: ${currentProgram.clipName}` 
+			: 'None'
+			
+		const previewClipDisplay = currentPreview.clipName && currentPreview.clipName !== '—' 
+			? `L${currentPreview.layer}C${currentPreview.column}: ${currentPreview.clipName}` 
+			: 'None'
+		
+		const timestampDisplay = showCallData.timestamp 
+			? new Date(showCallData.timestamp).toLocaleTimeString() 
+			: 'Never'
+		
+		const variableUpdate = {
 			connection_status: this.status.connected ? 'Connected' : 'Disconnected',
 			bpm: this.status.bpm || 120,
-			program_clips: this.status.program.length,
+			program_clips: program.length,
 			program_clip_names: clipNames || 'None',
-			composition_name: this.status.composition.name || 'Unknown',
-			composition_size: `${this.status.composition.layers || 8}x${this.status.composition.columns || 32}`,
+			composition_name: this.status.composition?.name || 'Unknown',
+			composition_size: `${this.status.composition?.layers || 8}x${this.status.composition?.columns || 32}`,
 			active_layers: activeLayerCount,
 			active_columns: activeColumnCount,
 			connection_uptime: uptimeStr,
+			current_program_clip: programClipDisplay,
+			current_preview_clip: previewClipDisplay,
+			showcall_host: showCallData.host || 'Unknown',
+			showcall_timestamp: timestampDisplay,
 			...layerVariables
-		})
+		}
+		
+		// DEBUG: Log variable updates
+		this.log('info', `Updating variables with real ShowCall data: ${JSON.stringify(variableUpdate, null, 2)}`)
+		
+		this.setVariableValues(variableUpdate)
 	}
 
 	formatUptime(seconds) {
