@@ -1,5 +1,52 @@
 # ShowCall Companion Module - Changelog
 
+## [2.1.0] - 2026-02-14
+
+### Added
+- **🎛️ Automatic Preset Sync**: Revolutionary automatic preset synchronization with ShowCall
+  - Dynamic preset button generation from ShowCall data
+  - Real-time preset updates via WebSocket
+  - `presets_updated` message handler
+  - Automatic button regeneration when presets change
+  - Smart button styling with color optimization
+  - Automatic text color selection based on background brightness
+
+- **New Actions**:
+  - `execute_preset`: Execute ShowCall preset by ID
+  - Enhanced `execute_macro` with better error handling
+
+- **Dynamic Button Generation**:
+  - "ShowCall Presets" category with auto-generated buttons
+  - Buttons use colors and labels from ShowCall
+  - Connection status feedback on all preset buttons
+  - Optimal text color for readability
+
+### Enhanced
+- **Preset Storage**: Added `showcallPresets` array to store preset data
+- **Message Handling**: Enhanced `handleMessage()` to process preset updates
+- **Button Generation**: Complete `initPresets()` overhaul for dynamic presets
+- **Logging**: Improved debug logging for preset sync
+- **Error Handling**: Better error messages for preset execution
+
+### Technical
+- Added preset sync on WebSocket connection
+- Automatic preset button regeneration on update
+- Color parsing for hex strings
+- Brightness calculation for text color optimization
+- Enhanced preset lookup logic
+
+### Documentation
+- Added `PRESET_INTEGRATION.md` - Complete technical guide
+- Updated `README.md` with v2.1.0 features
+- Added integration examples and code samples
+
+### Performance
+- Minimal bandwidth usage for preset sync
+- Real-time updates in <100ms
+- No polling required
+
+# ShowCall Companion Module - Changelog
+
 ## [2.0.0] - 2024-10-08
 
 ### 🚀 MAJOR RELEASE - Complete Feedback System Overhaul

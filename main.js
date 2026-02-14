@@ -23,6 +23,7 @@ class ShowCallInstance extends InstanceBase {
 		this.lastStatusUpdate = Date.now()
 		this.connectionRetryCount = 0
 		this.maxRetries = 10
+		this.showcallPresets = [] // Store ShowCall presets for dynamic buttons
 	}
 
 	async init(config) {
@@ -222,6 +223,11 @@ class ShowCallInstance extends InstanceBase {
 		} else if (message.type === 'composition') {
 			this.status.composition = { ...this.status.composition, ...message.data }
 			this.log('info', `Composition updated: ${JSON.stringify(message.data, null, 2)}`)
+		} else if (message.type === 'presets_updated') {
+			// Handle preset updates from ShowCall
+			this.log('info', `Presets updated from ShowCall: ${message.data.length} presets`)
+			this.showcallPresets = message.data || []
+			this.initPresets() // Regenerate presets with new data
 		} else if (message.type === 'response') {
 			this.log('debug', `Command response: ${message.message}`)
 		} else if (message.type === 'error') {
@@ -448,7 +454,28 @@ class ShowCallInstance extends InstanceBase {
 				],
 				callback: async (action) => {
 					this.sendCommand('execute_macro', {
-						macro_id: action.options.macro_id
+						macroId: action.options.macro_id
+					})
+				}
+			},
+			execute_preset: {
+				name: 'Execute ShowCall Preset',
+				description: 'Execute a preset from ShowCall by its ID',
+				options: [
+					{
+						type: 'textinput',
+						label: 'Preset ID',
+						id: 'preset_id',
+						default: '',
+						tooltip: 'The ID of the preset as defined in ShowCall',
+						required: true
+					}
+				],
+				callback: async (action) => {
+					const presetId = action.options.preset_id
+					this.log('info', `Executing ShowCall preset: ${presetId}`)
+					this.sendCommand('execute_macro', {
+						macroId: presetId
 					})
 				}
 			},
@@ -1266,6 +1293,73 @@ class ShowCallInstance extends InstanceBase {
 				]
 			})
 		})
+
+		// ============================================
+		// DYNAMIC SHOWCALL PRESETS
+		// ============================================
+		// Generate buttons from ShowCall preset definitions
+		if (this.showcallPresets && this.showcallPresets.length > 0) {
+			this.log('info', `Creating ${this.showcallPresets.length} dynamic preset buttons from ShowCall`)
+			
+			this.showcallPresets.forEach((preset, index) => {
+				// Parse color (handles both hex strings and numbers)
+				let bgColor = 0x666666 // Default gray
+				if (preset.color) {
+					if (typeof preset.color === 'string') {
+						bgColor = parseInt(preset.color.replace('#', ''), 16)
+					} else {
+						bgColor = preset.color
+					}
+				}
+				
+				// Choose text color based on background brightness
+				const r = (bgColor >> 16) & 0xff
+				const g = (bgColor >> 8) & 0xff
+				const b = bgColor & 0xff
+				const brightness = (r * 299 + g * 587 + b * 114) / 1000
+				const textColor = brightness > 128 ? 0x000000 : 0xffffff
+				
+				// Create preset button
+				presets.push({
+					type: 'button',
+					category: 'ShowCall Presets',
+					name: preset.label || preset.id,
+					style: {
+						text: preset.label || preset.id,
+						size: '12',
+						color: textColor,
+						bgcolor: bgColor
+					},
+					steps: [
+						{
+							down: [
+								{
+									actionId: 'execute_preset',
+									options: {
+										preset_id: preset.id
+									}
+								}
+							],
+							up: []
+						}
+					],
+					feedbacks: [
+						{
+							feedbackId: 'connection_status',
+							options: {},
+							style: {
+								bgcolor: bgColor & 0x808080, // Darker when disconnected
+								color: textColor
+							}
+						}
+					]
+				})
+			})
+			
+			this.log('info', `Added ${this.showcallPresets.length} ShowCall preset buttons`)
+		} else {
+			this.log('info', 'No ShowCall presets available yet - waiting for data from ShowCall')
+		}
 
 		// System status preset
 		presets.push({

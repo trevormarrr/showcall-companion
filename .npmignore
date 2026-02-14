@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Build artifacts
+dist/
+pkg/
+pkg.tgz
+DEBUG-PACKAGED
+
+# Old backup files
+*.backup
+*.old
+README_old.md
+main.js.backup
+main.js.old
+package.json.backup
+
+# Old package versions
+companion-module-showcall-1.0.0.tgz
+companion-module-showcall-v2.0.0.tgz
+companion-module-showcall-v2.0.0.zip
+companion-module-showcall-v2.0.1-debug.tgz
+companion-module-showcall-v2.0.2-FIXED.tgz
+
+# Development files
+.git/
+.gitignore
+.DS_Store
+*.log
+.env
+*.swp
+*.swo
+*~
+
+# Keep only the necessary files for Companion
+# Include: index.js, main.js, upgrades.js, companion/, package.json, README.md, LICENSE, CHANGELOG.md
