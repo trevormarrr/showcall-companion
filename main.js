@@ -24,6 +24,7 @@ class ShowCallInstance extends InstanceBase {
 		this.connectionRetryCount = 0
 		this.maxRetries = 10
 		this.showcallPresets = [] // Store ShowCall presets for dynamic buttons
+		this.activePresetId = null // Track currently executing preset
 	}
 
 	async init(config) {
@@ -228,6 +229,12 @@ class ShowCallInstance extends InstanceBase {
 			this.log('info', `Presets updated from ShowCall: ${message.data.length} presets`)
 			this.showcallPresets = message.data || []
 			this.initPresets() // Regenerate presets with new data
+			this.checkFeedbacks() // Update feedbacks with new preset list
+		} else if (message.type === 'preset_executing') {
+			// Handle preset execution state updates
+			this.activePresetId = message.data.presetId
+			this.log('debug', `Preset executing: ${this.activePresetId || 'none'}`)
+			this.checkFeedbacks('preset_active') // Update preset active feedback
 		} else if (message.type === 'response') {
 			this.log('debug', `Command response: ${message.message}`)
 		} else if (message.type === 'error') {
@@ -675,6 +682,30 @@ class ShowCallInstance extends InstanceBase {
 				},
 				callback: () => {
 					return this.status.connected
+				}
+			},
+			
+			preset_active: {
+				name: 'Preset Active',
+				type: 'boolean',
+				label: 'Preset is currently executing',
+				description: 'Show when a specific preset is currently being executed',
+				options: [
+					{
+						type: 'textinput',
+						label: 'Preset ID',
+						id: 'preset_id',
+						default: '',
+						required: true
+					}
+				],
+				defaultStyle: {
+					bgcolor: 0xffaa00, // Bright Orange
+					color: 0x000000    // Black
+				},
+				callback: (feedback) => {
+					const { preset_id } = feedback.options
+					return this.activePresetId === preset_id
 				}
 			},
 			
@@ -1344,6 +1375,16 @@ class ShowCallInstance extends InstanceBase {
 						}
 					],
 					feedbacks: [
+						{
+							feedbackId: 'preset_active',
+							options: {
+								preset_id: preset.id
+							},
+							style: {
+								bgcolor: 0xffaa00, // Bright orange when executing
+								color: 0x000000
+							}
+						},
 						{
 							feedbackId: 'connection_status',
 							options: {},

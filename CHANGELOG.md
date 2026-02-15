@@ -1,5 +1,31 @@
 # ShowCall Companion Module - Changelog
 
+## [2.1.1] - 2026-02-15
+
+### Fixed
+- **🔄 Real-time Preset Updates**: Presets now update instantly in Companion without restart
+  - Fixed preset sync to trigger on save (not just on initial connection)
+  - Added `presets_updated` broadcast when presets are saved in ShowCall
+  - Buttons regenerate automatically when presets are created/modified
+
+- **✨ Active Preset Feedback**: Buttons now show visual feedback when executing
+  - New `preset_active` feedback shows which preset is currently executing
+  - Buttons flash bright orange (500ms) when pressed
+  - Added `preset_executing` message handler for real-time state updates
+  - Each preset button includes active state feedback
+
+### Enhanced
+- **Preset Button Styling**: Active preset buttons now change to bright orange during execution
+- **State Tracking**: Added `activePresetId` to track currently executing preset
+- **Feedback System**: Enhanced feedback callbacks to check preset execution state
+- **Server Communication**: ShowCall server now broadcasts preset state changes
+
+### Technical Details
+- Added `activePresetId` property to track executing presets
+- Enhanced `preset_executing` message type handling
+- Improved `checkFeedbacks('preset_active')` calls for real-time updates
+- Added automatic feedback clear after 500ms execution time
+
 ## [2.1.0] - 2026-02-14
 
 ### Added
