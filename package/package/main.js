@@ -880,8 +880,7 @@ class ShowCallInstance extends InstanceBase {
 	}
 
 	initVariables() {
-		// Define all variables for dynamic button updates
-		const variableDefs = [
+		this.setVariableDefinitions([
 			{ variableId: 'connection_status', name: 'Connection Status' },
 			{ variableId: 'bpm', name: 'BPM' },
 			{ variableId: 'program_clips', name: 'Program Clips Count' },
@@ -892,64 +891,22 @@ class ShowCallInstance extends InstanceBase {
 			{ variableId: 'active_columns', name: 'Active Columns Count' },
 			{ variableId: 'last_triggered_clip', name: 'Last Triggered Clip' },
 			{ variableId: 'connection_uptime', name: 'Connection Uptime' },
-			// Layer status and name variables (for dynamic button labels)
 			{ variableId: 'layer_1_status', name: 'Layer 1 Status' },
-			{ variableId: 'layer_1_name', name: 'Layer 1 Custom Name' },
 			{ variableId: 'layer_2_status', name: 'Layer 2 Status' },
-			{ variableId: 'layer_2_name', name: 'Layer 2 Custom Name' },
 			{ variableId: 'layer_3_status', name: 'Layer 3 Status' },
-			{ variableId: 'layer_3_name', name: 'Layer 3 Custom Name' },
 			{ variableId: 'layer_4_status', name: 'Layer 4 Status' },
-			{ variableId: 'layer_4_name', name: 'Layer 4 Custom Name' },
 			{ variableId: 'layer_5_status', name: 'Layer 5 Status' },
-			{ variableId: 'layer_5_name', name: 'Layer 5 Custom Name' },
 			{ variableId: 'layer_6_status', name: 'Layer 6 Status' },
-			{ variableId: 'layer_6_name', name: 'Layer 6 Custom Name' },
 			{ variableId: 'layer_7_status', name: 'Layer 7 Status' },
-			{ variableId: 'layer_7_name', name: 'Layer 7 Custom Name' },
 			{ variableId: 'layer_8_status', name: 'Layer 8 Status' },
-			{ variableId: 'layer_8_name', name: 'Layer 8 Custom Name' },
-			// Column name variables (for dynamic button labels)
-			{ variableId: 'column_1_name', name: 'Column 1 Name' },
-			{ variableId: 'column_2_name', name: 'Column 2 Name' },
-			{ variableId: 'column_3_name', name: 'Column 3 Name' },
-			{ variableId: 'column_4_name', name: 'Column 4 Name' },
-			{ variableId: 'column_5_name', name: 'Column 5 Name' },
-			{ variableId: 'column_6_name', name: 'Column 6 Name' },
-			{ variableId: 'column_7_name', name: 'Column 7 Name' },
-			{ variableId: 'column_8_name', name: 'Column 8 Name' },
-			// Clip name variables (for dynamic button labels)
-			{ variableId: 'clip_1_1_name', name: 'Layer 1 Clip 1 Name' },
-			{ variableId: 'clip_1_2_name', name: 'Layer 1 Clip 2 Name' },
-			{ variableId: 'clip_1_3_name', name: 'Layer 1 Clip 3 Name' },
-			{ variableId: 'clip_1_4_name', name: 'Layer 1 Clip 4 Name' },
-			{ variableId: 'clip_1_5_name', name: 'Layer 1 Clip 5 Name' },
-			{ variableId: 'clip_1_6_name', name: 'Layer 1 Clip 6 Name' },
-			{ variableId: 'clip_1_7_name', name: 'Layer 1 Clip 7 Name' },
-			{ variableId: 'clip_1_8_name', name: 'Layer 1 Clip 8 Name' },
-			// Preset name variables (for dynamic button labels)
-			{ variableId: 'preset_1_name', name: 'Preset 1 Name' },
-			{ variableId: 'preset_2_name', name: 'Preset 2 Name' },
-			{ variableId: 'preset_3_name', name: 'Preset 3 Name' },
-			{ variableId: 'preset_4_name', name: 'Preset 4 Name' },
-			{ variableId: 'preset_5_name', name: 'Preset 5 Name' },
-			{ variableId: 'preset_6_name', name: 'Preset 6 Name' },
-			{ variableId: 'preset_7_name', name: 'Preset 7 Name' },
-			{ variableId: 'preset_8_name', name: 'Preset 8 Name' },
 			// ShowCall specific variables
 			{ variableId: 'current_program_clip', name: 'Current Program Clip' },
 			{ variableId: 'current_preview_clip', name: 'Current Preview Clip' },
 			{ variableId: 'showcall_host', name: 'ShowCall Host' },
-			{ variableId: 'showcall_timestamp', name: 'Last Update Time' },
-			// Macro/Preset name variables
-			{ variableId: 'last_executed_preset', name: 'Last Executed Preset' },
-			{ variableId: 'available_presets_count', name: 'Available Presets Count' }
-		]
-		
-		this.setVariableDefinitions(variableDefs)
+			{ variableId: 'showcall_timestamp', name: 'Last Update Time' }
+		])
 
-		// Initialize default values for all variables
-		const initialValues = {
+		this.setVariableValues({
 			connection_status: 'Disconnected',
 			bpm: 120,
 			program_clips: 0,
@@ -960,33 +917,19 @@ class ShowCallInstance extends InstanceBase {
 			active_columns: 0,
 			last_triggered_clip: 'None',
 			connection_uptime: '0s',
+			layer_1_status: 'Inactive',
+			layer_2_status: 'Inactive',
+			layer_3_status: 'Inactive',
+			layer_4_status: 'Inactive',
+			layer_5_status: 'Inactive',
+			layer_6_status: 'Inactive',
+			layer_7_status: 'Inactive',
+			layer_8_status: 'Inactive',
 			current_program_clip: 'None',
 			current_preview_clip: 'None',
 			showcall_host: 'Unknown',
-			showcall_timestamp: 'Never',
-			last_executed_preset: 'None',
-			available_presets_count: 0
-		}
-		
-		// Initialize layer status and custom name variables
-		for (let i = 1; i <= 8; i++) {
-			initialValues[`layer_${i}_status`] = 'Inactive'
-			initialValues[`layer_${i}_name`] = `Layer ${i}`
-		}
-		
-		// Initialize column name variables
-		for (let i = 1; i <= 8; i++) {
-			initialValues[`column_${i}_name`] = `Column ${i}`
-		}
-		
-		// Initialize clip name variables for first 2 layers
-		for (let layer = 1; layer <= 2; layer++) {
-			for (let column = 1; column <= 8; column++) {
-				initialValues[`clip_${layer}_${column}_name`] = `Clip L${layer}C${column}`
-			}
-		}
-		
-		this.setVariableValues(initialValues)
+			showcall_timestamp: 'Never'
+		})
 	}
 
 	updateVariables() {
@@ -1005,51 +948,12 @@ class ShowCallInstance extends InstanceBase {
 		const uptimeSeconds = Math.floor(uptimeMs / 1000)
 		const uptimeStr = this.formatUptime(uptimeSeconds)
 		
-		// Update layer status variables and extract names from ShowCall data
+		// Update layer status variables
 		const layerVariables = {}
-		const composition = this.status.composition || {}
 		for (let i = 1; i <= 8; i++) {
 			const layerActive = this.status.layers?.[i]?.active
 			const clipCount = this.status.layers?.[i]?.clips?.length || 0
 			layerVariables[`layer_${i}_status`] = layerActive ? `Active (${clipCount})` : 'Inactive'
-			
-			// Try to get layer name from ShowCall data, fallback to default
-			// This will be populated when ShowCall sends layer metadata
-			if (!layerVariables[`layer_${i}_name`]) {
-				layerVariables[`layer_${i}_name`] = `Layer ${i}`
-			}
-		}
-		
-		// Update column name variables from ShowCall composition data
-		const columnVariables = {}
-		if (composition.columns) {
-			for (let i = 1; i <= Math.min(composition.columns, 32); i++) {
-				// Names will be set from ShowCall metadata when available
-				columnVariables[`column_${i}_name`] = `Column ${i}`
-			}
-		}
-		
-		// Update clip name variables from program data
-		const clipVariables = {}
-		if (program && Array.isArray(program)) {
-			program.forEach(clip => {
-				if (clip.layer && clip.column && clip.clipName) {
-					// Store clip name for dynamic button labels (layer 1-2, column 1-8 for now)
-					if (clip.layer <= 2 && clip.column <= 8) {
-						clipVariables[`clip_${clip.layer}_${clip.column}_name`] = clip.clipName
-					}
-				}
-			})
-		}
-		
-		// Update preset name variables from ShowCall presets
-		const presetVariables = {}
-		if (this.showcallPresets && Array.isArray(this.showcallPresets)) {
-			this.showcallPresets.forEach((preset, index) => {
-				if (index < 8) { // First 8 presets
-					presetVariables[`preset_${index + 1}_name`] = preset.label || preset.id
-				}
-			})
 		}
 		
 		// ShowCall specific data
@@ -1083,11 +987,7 @@ class ShowCallInstance extends InstanceBase {
 			current_preview_clip: previewClipDisplay,
 			showcall_host: showCallData.host || 'Unknown',
 			showcall_timestamp: timestampDisplay,
-			available_presets_count: this.showcallPresets?.length || 0,
-			...layerVariables,
-			...columnVariables,
-			...clipVariables,
-			...presetVariables
+			...layerVariables
 		}
 		
 		// DEBUG: Log variable updates
@@ -1237,7 +1137,7 @@ class ShowCallInstance extends InstanceBase {
 			]
 		})
 
-		// Enhanced clip trigger presets with multiple feedback types and DYNAMIC NAMES
+		// Enhanced clip trigger presets with multiple feedback types
 		for (let layer = 1; layer <= 4; layer++) {
 			for (let column = 1; column <= 8; column++) {
 				presets.push({
@@ -1245,8 +1145,7 @@ class ShowCallInstance extends InstanceBase {
 					category: `Layer ${layer}`,
 					name: `Layer ${layer} Clip ${column}`,
 					style: {
-						// Dynamic button text that updates from ShowCall clip names
-						text: `$(showcall:clip_${layer}_${column}_name)`,
+						text: `L${layer}C${column}`,
 						size: '14',
 						color: 0xffffff,
 						bgcolor: 0x202020
@@ -1289,15 +1188,14 @@ class ShowCallInstance extends InstanceBase {
 			}
 		}
 
-		// Enhanced column trigger presets with column feedback and DYNAMIC NAMES
+		// Enhanced column trigger presets with column feedback
 		for (let column = 1; column <= 8; column++) {
 			presets.push({
 				type: 'button',
 				category: 'Columns',
 				name: `Column ${column}`,
 				style: {
-					// Dynamic button text using column names from ShowCall
-					text: `$(showcall:column_${column}_name)`,
+					text: `COL\\n${column}`,
 					size: '14',
 					color: 0xffffff,
 					bgcolor: 0x2c3e50
@@ -1330,15 +1228,14 @@ class ShowCallInstance extends InstanceBase {
 			})
 		}
 
-		// Enhanced layer status indicators with DYNAMIC NAMES
+		// Layer status indicators
 		for (let layer = 1; layer <= 8; layer++) {
 			presets.push({
 				type: 'button',
 				category: 'Layer Status',
 				name: `Layer ${layer} Status`,
 				style: {
-					// Dynamic button text showing layer name and status
-					text: `$(showcall:layer_${layer}_name)\\n$(showcall:layer_${layer}_status)`,
+					text: `L${layer}\\n$(showcall:layer_${layer}_status)`,
 					size: '12',
 					color: 0xffffff,
 					bgcolor: 0x2c2c2c
@@ -1453,14 +1350,13 @@ class ShowCallInstance extends InstanceBase {
 				const brightness = (r * 299 + g * 587 + b * 114) / 1000
 				const textColor = brightness > 128 ? 0x000000 : 0xffffff
 				
-				// Create preset button with DYNAMIC LABEL from variable
+				// Create preset button
 				presets.push({
 					type: 'button',
 					category: 'ShowCall Presets',
 					name: preset.label || preset.id,
 					style: {
-						// Pull preset name from variable - updates in real-time from ShowCall
-						text: index < 8 ? `$(showcall:preset_${index + 1}_name)` : preset.label || preset.id,
+						text: preset.label || preset.id,
 						size: '12',
 						color: textColor,
 						bgcolor: bgColor
@@ -1501,18 +1397,18 @@ class ShowCallInstance extends InstanceBase {
 				})
 			})
 			
-			this.log('info', `Added ${this.showcallPresets.length} ShowCall preset buttons with dynamic names`)
+			this.log('info', `Added ${this.showcallPresets.length} ShowCall preset buttons`)
 		} else {
 			this.log('info', 'No ShowCall presets available yet - waiting for data from ShowCall')
 		}
 
-		// System status preset with enhanced real-time information
+		// System status preset
 		presets.push({
 			type: 'button',
 			category: 'System',
 			name: 'System Status',
 			style: {
-				text: '$(showcall:connection_status)\\n$(showcall:program_clips) clips\\n$(showcall:bpm) BPM',
+				text: '$(showcall:connection_status)\\n$(showcall:program_clips) clips\\n$(showcall:active_layers) layers',
 				size: '10',
 				color: 0xffffff,
 				bgcolor: 0x2c2c2c

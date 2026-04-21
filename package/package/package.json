@@ -1,6 +1,6 @@
 {
   "name": "companion-module-showcall",
-  "version": "2.2.0",
+  "version": "2.1.1",
   "main": "index.js",
   "license": "MIT",
   "keywords": [
@@ -16,10 +16,6 @@
     "@companion-module/base": "~1.8.0",
     "ws": "^8.18.3"
   },
-  "bundledDependencies": [
-    "@companion-module/base",
-    "ws"
-  ],
   "author": "Trevor Marr",
   "description": "Control ShowCall Resolume integration via Stream Deck",
   "bugs": {

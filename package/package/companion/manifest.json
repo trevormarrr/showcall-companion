@@ -6,7 +6,7 @@
   "manufacturer": "ShowCall",
   "products": ["ShowCall"],
   "keywords": ["Video", "Resolume", "VJ", "Stream Deck"],
-  "version": "2.2.0",
+  "version": "2.1.1",
   "license": "MIT",
   "repository": "git+https://github.com/trevormarr/showcall-companion.git",
   "bugs": "https://github.com/trevormarr/showcall-companion/issues",
@@ -19,8 +19,8 @@
   "legacyIds": [],
   "runtime": {
     "type": "node18",
-    "api": "nodejs-ipc",
-    "apiVersion": "0.0.0",
+    "api": "nodejs-module",
+    "apiVersion": "1.0.0",
     "entrypoint": "../index.js"
   }
 }

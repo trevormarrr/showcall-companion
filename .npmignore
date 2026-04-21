@@ -1,5 +1,5 @@
-# Dependencies
-node_modules/
+# Dependencies - DO NOT IGNORE node_modules! Companion needs them bundled
+# node_modules/  <-- COMMENTED OUT - Companion modules need dependencies included!
 package-lock.json
 
 # Build artifacts
