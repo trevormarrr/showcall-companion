@@ -9,3 +9,9 @@ dist/
 pkg/
 pkg.tgz
 DEBUG-PACKAGED
+.companion-module
+*.tgz
+.idea/
+.vscode/
+*.backup
+*.old

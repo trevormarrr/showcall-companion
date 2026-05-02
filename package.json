@@ -1,16 +1,31 @@
 {
   "name": "companion-module-showcall",
   "version": "2.2.0",
+  "description": "Control ShowCall's Resolume integration directly from Stream Deck via Bitfocus Companion",
   "main": "index.js",
+  "author": "Trevor Marr",
   "license": "MIT",
   "keywords": [
-    "Video",
-    "Resolume",
-    "ShowCall"
+    "companion",
+    "module",
+    "showcall",
+    "resolume",
+    "stream-deck",
+    "bitfocus",
+    "video",
+    "vj",
+    "control"
   ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/trevormarr/showcall-companion.git"
+  },
+  "bugs": {
+    "url": "https://github.com/trevormarr/showcall-companion/issues"
+  },
+  "homepage": "https://github.com/trevormarr/showcall-companion#readme",
+  "engines": {
+    "node": ">=18.12.0"
   },
   "dependencies": {
     "@companion-module/base": "~1.8.0",
@@ -19,11 +34,5 @@
   "bundledDependencies": [
     "@companion-module/base",
     "ws"
-  ],
-  "author": "Trevor Marr",
-  "description": "Control ShowCall Resolume integration via Stream Deck",
-  "bugs": {
-    "url": "https://github.com/trevormarr/showcall-companion/issues"
-  },
-  "homepage": "https://github.com/trevormarr/showcall-companion"
+  ]
 }
