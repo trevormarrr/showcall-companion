@@ -57,22 +57,40 @@ This module provides comprehensive control of ShowCall's Resolume integration vi
 ### Actions
 
 **Trigger Clip**: Fire individual clips by layer (1-8) and column (1-32)
-**Trigger Column**: Fire all clips in a specific column (1-32)  
+**Trigger Column**: Fire all clips in a specific column (1-32)
 **Cut to Program**: Execute a cut operation (Resolume tempo resync)
 **Clear All**: Disconnect all active clips
-**Execute Macro**: Run custom ShowCall macros by ID
+**Execute Macro (raw steps)**: Run custom macro steps as JSON (trigger/triggercolumn/cut/clear/sleep)
+**Execute ShowCall Preset**: Run a preset from ShowCall's active bank by its ID
+**Refresh Status**: Request an immediate status snapshot from ShowCall
+
+ShowCall does not currently support stopping an individual clip/layer/column, BPM control, or layer opacity over this API, so those are not offered here.
 
 ### Feedbacks
 
-**Clip Active**: Shows red background when a specific clip is active in program
-**Connection Status**: Shows green when connected to ShowCall server
+**Connection Status**: Green when connected to ShowCall
+**Clip Active**: Red when a specific layer/column clip is live in program
+**Clip in Preview**: Gray when a clip is queued/selected in Resolume but not yet triggered
+**Layer Active / Column Active**: Orange/blue when any clip is live in that layer/column
+**Any Clips Active**: Purple when at least one clip is live
+**BPM in Range**: Green when current BPM falls within a configured range
+**Preset Executing**: Orange while a given preset ID is actively running
+**ShowCall Preset Style (live)**: Looks up a preset by ID every update and applies its current label/color - this is what keeps dynamic preset buttons accurate without re-dragging them
+
+### Preset Sync
+
+Dynamic "ShowCall Presets" buttons reflect whatever bank is currently active in ShowCall. ShowCall pushes a fresh preset list to Companion whenever you save presets, switch banks, or clear a bank - no reconnect needed. Buttons are keyed by preset ID, so renaming/recoloring a preset updates already-placed buttons live.
 
 ### Variables
 
-- `connection_status`: Connected/Disconnected
-- `bpm`: Current BPM from Resolume
-- `program_clips`: Number of active clips
-- `program_clip_names`: Comma-separated list of active clip names
+- `connection_status` / `connection_uptime`
+- `bpm`, `composition_name`, `showcall_host`
+- `program_clip_count`, `program_clip_names`, `preview_clip`
+- `active_layer_count`, `active_column_count`
+- `available_presets_count`, `active_preset_label`
+- `layer_N_status`, `layer_N_name` (per configured layer)
+- `clip_L_C_name` (per configured layer/column)
+- `preset_N_name`, `preset_N_id` (per preset slot in the active bank)
 
 ### Troubleshooting
 

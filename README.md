@@ -1,44 +1,72 @@
 # ShowCall Companion Module
 
-Control ShowCall's Resolume integration directly from Stream Deck via Bitfocus Companion with comprehensive feedback system, real-time sync, and professional preset management.
+Control [ShowCall](https://github.com/trevormarrr/showcall)'s Resolume integration from a Stream Deck via Bitfocus Companion, with live feedback and preset buttons that stay in sync with whatever is actually configured in ShowCall.
 
-**Version:** 2.2.0 | **License:** MIT | **Node.js:** 18.12+
+**Version:** 2.3.0 | **License:** MIT | **Node.js:** 18.12+
 
-## Features
+## What this module actually does
 
-### Core Capabilities
-- **Real-time ShowCall Integration**: Seamless control via WebSocket connection
-- **Comprehensive Feedback System**: Visual feedback for all ShowCall states
-  - Clip activity (Red background)
-  - Layer status (Orange background)
-  - Column activity (Blue background)
-  - Connection status (Green background)
-  - BPM range matching (Green when in range)
-  - Clip opacity and position visualization
-  
-- **Dynamic Controls**
-  - Individual clip triggers with stop functionality
-  - Layer and column control (start/stop)
-  - BPM control with tap tempo
-  - Layer opacity adjustment
-  - Cut/Clear All operations
-  - Composition resync
+This module talks to ShowCall's real WebSocket API at `ws://<host>:<port>/api/companion`. Every action, feedback, and variable below maps directly to something ShowCall's server actually implements - nothing here is aspirational.
 
-### Preset System
-- **Automatic Preset Sync**: Dynamic preset button generation from ShowCall data
-- **Real-time Updates**: Presets update instantly when created/modified in ShowCall
-- **Visual Feedback**: Color-coded buttons with automatic text contrast adjustment
-- **Scene Macros**: 8 pre-configured scenes (Walk-In, Sermon, Baptism, Closing, Worship, Prayer, Offering, Announce)
+### Actions
+| Action | ShowCall command | Notes |
+|---|---|---|
+| Trigger Clip | `trigger_clip` | Fires `/composition/layers/{layer}/clips/{column}/connect` |
+| Trigger Column | `trigger_column` | Fires `/composition/columns/{column}/connect` |
+| Cut to Program | `cut_to_program` | Fires ShowCall's composition resync |
+| Clear All | `clear_all` | Disconnects all clips |
+| Execute Macro (raw steps) | `execute_macro` | Send your own `[{type, layer, column, ms}]` JSON steps |
+| Execute ShowCall Preset | `execute_macro` (by `macroId`) | Runs a preset from ShowCall's **active bank** by ID |
+| Refresh Status | `get_status` | Requests an immediate status snapshot |
 
-### Advanced Monitoring
-- **Connection Health**: Real-time status with automatic retry logic
-- **Performance Tracking**: Monitor active clips, layers, and columns
-- **Live Variables**: 
-  - Connection status and uptime
-  - Real-time BPM display
-  - Active clip counts and names
-  - Composition information
-  - Individual layer status
+ShowCall does **not** currently support stopping an individual clip/layer/column, setting BPM, tap tempo, or layer opacity over this API - so this module doesn't pretend to either. If those land in a future ShowCall release, they can be added here.
+
+### Feedbacks
+| Feedback | Type | Behavior |
+|---|---|---|
+| `connection_status` | boolean | Connected to ShowCall |
+| `clip_active` | boolean | Given layer/column is live in program |
+| `clip_preview` | boolean | Given layer/column is queued in Resolume (Previewed) |
+| `layer_active` | boolean | Any clip live in the given layer |
+| `column_active` | boolean | Any clip live in the given column |
+| `any_clips_active` | boolean | At least one clip is live |
+| `bpm_range` | boolean | Current BPM is within a min/max range |
+| `preset_active` | boolean | Given preset ID is currently executing |
+| `preset_style` | advanced | **Live-looks-up** a preset by ID and applies its current label/color, even on buttons placed a long time ago |
+
+### Live preset sync (the important part)
+
+Dynamic "ShowCall Presets" buttons are generated straight from whatever preset bank is active in ShowCall. This module keeps them in sync in three ways:
+
+1. On connect, ShowCall sends the **currently active bank's** presets (not a stale legacy file).
+2. Any time you save presets, switch banks, or clear a bank inside ShowCall, it broadcasts a fresh preset list over the WebSocket to every connected Companion instance.
+3. Placed buttons use a live `preset_style` feedback keyed by preset **ID** (not array position), so if you rename a preset or change its color in ShowCall, already-placed Stream Deck buttons update automatically - no re-dragging required. If a preset is deleted, the button greys out and shows `(removed)` instead of silently going stale.
+
+> These fixes required small corrections on the ShowCall server side too (it previously only pushed the legacy preset file on connect, and never broadcast on bank switch/clear). Make sure you're running an up-to-date ShowCall build that includes these companion-sync fixes.
+
+### Variables
+
+```
+$(showcall:connection_status)        Connected / Disconnected
+$(showcall:connection_uptime)        e.g. 4m 12s
+$(showcall:bpm)                      Current BPM (or — if unknown)
+$(showcall:composition_name)         Current Resolume composition name
+$(showcall:showcall_host)            Host ShowCall reports itself as
+$(showcall:program_clip_count)       Number of clips currently live
+$(showcall:program_clip_names)       e.g. "L1C1:Intro, L2C3:Lower Third"
+$(showcall:preview_clip)             Currently queued/selected clip, or "None"
+$(showcall:active_layer_count)       Number of layers with a live clip
+$(showcall:active_column_count)      Number of columns with a live clip
+$(showcall:available_presets_count)  Presets in the active bank
+$(showcall:active_preset_label)      Label of the currently executing preset
+$(showcall:layer_N_status)           "Active (n)" / "Inactive" for layer N
+$(showcall:layer_N_name)             Best-effort layer name (from an active clip)
+$(showcall:clip_L_C_name)            Clip name at layer L / column C
+$(showcall:preset_N_name)            Label of the Nth preset in the active bank
+$(showcall:preset_N_id)              ID of the Nth preset in the active bank
+```
+
+`layer_N_*` and `clip_L_C_*` variables are only generated for the grid size you configure (see below) - ShowCall never tells Companion how many layers/columns a composition has, so this module can't know it automatically.
 
 ## Installation
 
@@ -73,109 +101,38 @@ Control ShowCall's Resolume integration directly from Stream Deck via Bitfocus C
    - Configure:
      - **Host:** `localhost` (or your ShowCall machine IP)
      - **Port:** `3200` (default ShowCall companion port)
+     - **Layers to expose / Columns to expose:** match how many you actually use
    - Click **Save**
-
-### Supported Installation Methods
-- **Developer Module** (Recommended for development)
-- **Direct Module Installation** (Copy to Companion modules directory)
-- **Docker** (If running Companion in Docker)
 
 For detailed installation instructions, see [INSTALL.md](INSTALL.md).
 
-## Available Actions
+## Configuration
 
-### Clip Control
-- **Play Clip**: Trigger a specific clip by layer and column
-- **Stop Clip**: Stop a specific clip
-- **Toggle Clip**: Toggle a clip on/off
+| Field | Default | Purpose |
+|---|---|---|
+| Host | `localhost` | Machine running ShowCall |
+| Port | `3200` | ShowCall's companion WebSocket port |
+| Layers to expose | `4` | How many layers get clip-trigger buttons/variables (1-8) |
+| Columns to expose | `8` | How many columns get clip-trigger buttons/variables (1-32) |
 
-### Layer Control
-- **Start Layer**: Start all clips in a layer
-- **Stop Layer**: Stop all clips in a layer
-- **Set Layer Opacity**: Adjust layer opacity (0-100%)
-
-### Column Control
-- **Start Column**: Start all clips in a column
-- **Stop Column**: Stop all clips in a column
-
-### Global Control
-- **Cut**: Perform a cut to program
-- **Clear All**: Stop all playing clips
-- **Tap Tempo**: Set BPM by tapping
-- **Set BPM**: Set BPM to specific value
-- **Resync**: Force composition resync with ShowCall
-
-### Preset Control
-- **Execute Preset**: Run a ShowCall preset by ID
-- **Execute Macro**: Run a scene macro
-
-## Available Feedbacks
-
-Configure visual feedback on your buttons:
-
-| Feedback | Behavior | Color |
-|----------|----------|-------|
-| `clip_active` | Specific clip is playing | Red |
-| `layer_active` | Layer has active clips | Orange |
-| `column_active` | Column has active clips | Blue |
-| `connection_status` | Connected to ShowCall | Green |
-| `any_clips_active` | Any clips playing | Purple |
-| `bpm_range` | BPM in specified range | Green |
-| `clip_opacity_level` | Clip opacity visualization | Brightness |
-| `clip_preview` | Clip in preview mode | Gray |
-| `preset_active` | Preset executing | Orange |
-
-## Available Variables
-
-Display live ShowCall data on buttons:
-
-```
-$(showcall:connection_status)      - Connected/Disconnected
-$(showcall:bpm)                    - Current BPM value
-$(showcall:program_clips)          - Count of active clips
-$(showcall:program_clip_names)     - Names of active clips
-$(showcall:composition_name)       - Current composition name
-$(showcall:active_layers)          - Count of active layers
-$(showcall:active_columns)         - Count of active columns
-$(showcall:layer_1_status)         - Layer 1 status (Inactive/Active)
-...and so on for all 8 layers
-```
+Changing Layers/Columns regenerates the preset button grid and variable list immediately.
 
 ## Troubleshooting
 
-### Connection Issues
-**Problem**: "Cannot connect to ShowCall"
-- Verify ShowCall is running on the specified host/port
-- Check firewall isn't blocking port 3200
-- Try `localhost` if both are on same machine
-- Verify ShowCall version is 1.5.0+
+**Can't connect to ShowCall**
+- Confirm ShowCall is actually running and its companion WebSocket is up (check ShowCall's own logs for `Companion module connected`)
+- If Companion and ShowCall are on different machines, use the actual IP, not `localhost`
+- Confirm nothing else is bound to port 3200
 
-**Problem**: "Module not found" error
-- Run `npm install` in the module folder
-- Restart Companion after installation
-- Check that all files are present
+**Preset buttons don't update after editing in ShowCall**
+- Make sure you're running a ShowCall build that broadcasts on preset save/bank switch/bank clear (older builds only pushed presets on initial connect)
+- Check the ShowCall console for `🎛️ Broadcasted preset sync` log lines when you save/switch/clear
 
-### Feedback Not Working
-- Verify connection is active (green status)
-- Refresh Companion connection
-- Clear button cache in Companion settings
-- Check browser console for errors
-
-### Preset Sync Issues
-- Restart Companion connection to ShowCall
-- Verify WebSocket is enabled in ShowCall
-- Check Companion and ShowCall are on same network
+**Feedback stops updating when ShowCall is minimized**
+- Older ShowCall builds only sent status to Companion while the ShowCall UI's own dashboard was open. If you're still seeing this, update ShowCall - status is now polled independently of the UI whenever a Companion client is connected.
 
 For additional troubleshooting, see the [INSTALL.md](INSTALL.md) guide.
 
-## Configuration Reference
+## License
 
-### ShowCall Connection Settings
-- **Host**: IP address or hostname of ShowCall (default: `localhost`)
-- **Port**: WebSocket port (default: `3200`)
-- **Auto-reconnect**: Enabled by default with 10 retry attempts
-
-### Advanced Options
-- **Feedback Update Interval**: Real-time (no delay)
-- **Connection Timeout**: 5 seconds
-- **Maximum Retry Attempts**: 10 (approximately 30 seconds total)
+MIT © Trevor Marr

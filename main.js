@@ -1,30 +1,54 @@
-const { InstanceBase, Regex, runEntrypoint, InstanceStatus } = require('@companion-module/base')
+const { InstanceBase, runEntrypoint, InstanceStatus } = require('@companion-module/base')
 const WebSocket = require('ws')
+
+// Real ShowCall companion protocol (ws://host:port/api/companion):
+//
+// Incoming message types:
+//   status_update    { data: { connected, bpm, comp, host, restPort, oscPort,
+//                               programClips: [{layer, column, clipName, layerName}],
+//                               program: {..first clip or placeholder..},
+//                               preview: {..queued clip or placeholder..} } }
+//   presets_updated  { data: [{id, label, color, hotkey, macro}], bank }
+//   preset_executing { data: { presetId, label } }
+//   command_response { id, result: { ok, ... } }
+//
+// Outgoing actions (ws.send({ action, ...params, id })):
+//   trigger_clip   { layer, column }
+//   trigger_column { column }
+//   cut_to_program
+//   clear_all
+//   execute_macro  { macro: [...] }  OR  { macroId }
+//   get_status
+//
+// There is NO stop_clip/stop_layer/stop_column/set_bpm/tap_tempo/opacity control
+// in ShowCall itself - those were previously faked in this module and never
+// actually did anything. They have been removed.
 
 class ShowCallInstance extends InstanceBase {
 	constructor(internal) {
 		super(internal)
 		this.ws = null
 		this.reconnectTimer = null
+		this.commandId = 0
+
 		this.status = {
 			connected: false,
-			program: [],
-			preview: null,
-			bpm: 120,
-			layers: {}, // Track active clips per layer
-			columns: {}, // Track active clips per column
-			clips: {}, // Track individual clip states
-			composition: {
-				name: '',
-				columns: 32,
-				layers: 8
-			}
+			bpm: null,
+			compositionName: null,
+			host: null,
+			programClips: [], // [{layer, column, clipName, layerName}]
+			preview: null,     // {layer, column, clipName, layerName} | null
+			layers: {},        // layer -> { active, clipCount }
+			columns: {},       // column -> { active, clipCount }
+			clips: {},         // "layer-column" -> { active, clipName, layerName }
 		}
-		this.lastStatusUpdate = Date.now()
+
+		this.connectedSince = null
 		this.connectionRetryCount = 0
 		this.maxRetries = 10
-		this.showcallPresets = [] // Store ShowCall presets for dynamic buttons
-		this.activePresetId = null // Track currently executing preset
+
+		this.showcallPresets = [] // Raw preset list as broadcast by ShowCall
+		this.activePresetId = null // Currently-executing preset id (for feedback)
 	}
 
 	async init(config) {
@@ -35,9 +59,6 @@ class ShowCallInstance extends InstanceBase {
 		this.initVariables()
 		this.initPresets()
 		this.connectWebSocket()
-		
-		// Initialize empty state
-		this.updateClipStates()
 	}
 
 	async destroy() {
@@ -45,12 +66,23 @@ class ShowCallInstance extends InstanceBase {
 			clearTimeout(this.reconnectTimer)
 		}
 		if (this.ws) {
+			this.ws.removeAllListeners()
 			this.ws.close()
 		}
 	}
 
 	async configUpdated(config) {
+		const gridChanged =
+			config.layers !== this.config?.layers || config.columns !== this.config?.columns
+
 		this.config = config
+
+		if (gridChanged) {
+			// Grid size affects how many clip/column buttons and variables we generate
+			this.initVariables()
+			this.initPresets()
+		}
+
 		this.reconnectWebSocket()
 	}
 
@@ -61,7 +93,8 @@ class ShowCallInstance extends InstanceBase {
 				id: 'host',
 				label: 'ShowCall Host',
 				width: 8,
-				default: 'localhost'
+				default: 'localhost',
+				tooltip: 'The machine running ShowCall. Use localhost if Companion runs on the same computer.'
 			},
 			{
 				type: 'number',
@@ -71,16 +104,48 @@ class ShowCallInstance extends InstanceBase {
 				min: 1,
 				max: 65535,
 				default: 3200
+			},
+			{
+				type: 'number',
+				id: 'layers',
+				label: 'Layers to expose as buttons',
+				width: 6,
+				min: 1,
+				max: 8,
+				default: 4,
+				tooltip: 'How many layers to generate clip-trigger buttons/variables for.'
+			},
+			{
+				type: 'number',
+				id: 'columns',
+				label: 'Columns to expose as buttons',
+				width: 6,
+				min: 1,
+				max: 32,
+				default: 8,
+				tooltip: 'How many columns to generate clip-trigger buttons/variables for.'
 			}
 		]
 	}
 
+	get numLayers() {
+		return Math.max(1, Math.min(8, parseInt(this.config?.layers) || 4))
+	}
+
+	get numColumns() {
+		return Math.max(1, Math.min(32, parseInt(this.config?.columns) || 8))
+	}
+
 	connectWebSocket() {
 		if (this.ws) {
+			this.ws.removeAllListeners()
 			this.ws.close()
 		}
 
-		const wsUrl = `ws://${this.config.host || 'localhost'}:${this.config.port || 3200}/api/companion`
+		const host = this.config?.host || 'localhost'
+		const port = this.config?.port || 3200
+		const wsUrl = `ws://${host}:${port}/api/companion`
+
 		this.log('info', `Connecting to ShowCall at ${wsUrl} (attempt ${this.connectionRetryCount + 1}/${this.maxRetries})`)
 
 		this.ws = new WebSocket(wsUrl)
@@ -89,22 +154,14 @@ class ShowCallInstance extends InstanceBase {
 			this.log('info', 'Connected to ShowCall')
 			this.updateStatus(InstanceStatus.Ok)
 			this.status.connected = true
+			this.connectedSince = Date.now()
 			this.connectionRetryCount = 0
-			this.setVariableValues({ connection_status: 'Connected' })
-			
-			// Request initial status and composition info
+
+			// ShowCall pushes presets_updated and status_update on its own once
+			// connected, but request an immediate status snapshot too.
 			this.sendCommand('get_status')
-			this.sendCommand('get_composition')
-			
-			// TESTING: Also try alternative status request formats
-			this.sendCommand('status')
-			this.sendCommand('get_state')
-			this.sendCommand('get_clips')
-			
-			// Log connection details for debugging
-			this.log('info', `Connected to ShowCall WebSocket at ${wsUrl}`)
-			
-			// Check feedbacks immediately on connection
+
+			this.updateVariables()
 			this.checkFeedbacks()
 		})
 
@@ -121,20 +178,17 @@ class ShowCallInstance extends InstanceBase {
 			this.log('warn', 'Disconnected from ShowCall')
 			this.updateStatus(InstanceStatus.Disconnected)
 			this.status.connected = false
-			this.setVariableValues({ connection_status: 'Disconnected' })
-			
-			// Clear all active states on disconnect
-			this.clearAllStates()
-			
-			// Attempt to reconnect with exponential backoff
+			this.connectedSince = null
+			this.clearAllClipStates()
+			this.updateVariables()
+			this.checkFeedbacks()
+
 			if (this.connectionRetryCount < this.maxRetries) {
 				const delay = Math.min(5000 * Math.pow(1.5, this.connectionRetryCount), 30000)
 				this.connectionRetryCount++
-				this.reconnectTimer = setTimeout(() => {
-					this.connectWebSocket()
-				}, delay)
+				this.reconnectTimer = setTimeout(() => this.connectWebSocket(), delay)
 			} else {
-				this.log('error', 'Max reconnection attempts reached. Please check ShowCall connection.')
+				this.log('error', 'Max reconnection attempts reached. Check ShowCall host/port and that ShowCall is running.')
 				this.updateStatus(InstanceStatus.ConnectionFailure)
 			}
 		})
@@ -146,6 +200,7 @@ class ShowCallInstance extends InstanceBase {
 	}
 
 	reconnectWebSocket() {
+		this.connectionRetryCount = 0
 		if (this.reconnectTimer) {
 			clearTimeout(this.reconnectTimer)
 		}
@@ -154,1444 +209,560 @@ class ShowCallInstance extends InstanceBase {
 
 	sendCommand(action, params = {}) {
 		if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-			const message = { action, ...params }
-			const messageStr = JSON.stringify(message)
-			this.log('info', `Sending command to ShowCall: ${messageStr}`)
-			this.ws.send(messageStr)
+			const message = { action, id: ++this.commandId, ...params }
+			this.ws.send(JSON.stringify(message))
 		} else {
-			this.log('warn', `Cannot send command '${action}' - not connected to ShowCall. WebSocket state: ${this.ws ? this.ws.readyState : 'null'}`)
+			this.log('warn', `Cannot send command '${action}' - not connected to ShowCall`)
 		}
 	}
 
 	handleMessage(message) {
-		this.lastStatusUpdate = Date.now()
-		
-		// DEBUG: Log all incoming messages to understand ShowCall's data format
-		this.log('info', `ShowCall Message Received: ${JSON.stringify(message, null, 2)}`)
-		
-		if (message.type === 'status' || message.type === 'status_update') {
-			// DEBUG: Log the current status before and after update
-			this.log('info', `Processing ${message.type} message`)
-			
-			// Handle ShowCall's actual data format
-			if (message.data) {
-				// Update connection status
-				this.status.connected = message.data.connected || false
-				
-				// Update BPM
-				this.status.bpm = message.data.bpm || 120
-				
-				// Update composition info
-				if (message.data.comp) {
-					this.status.composition = {
-						...this.status.composition,
-						name: message.data.comp
-					}
-				}
-				
-				// Convert ShowCall's programClips to our expected format
-				if (message.data.programClips && Array.isArray(message.data.programClips)) {
-					this.status.program = message.data.programClips.map(clip => ({
-						layer: clip.layer,
-						column: clip.column,
-						clipName: clip.clipName || '',
-						layerName: clip.layerName || '',
-						opacity: clip.opacity || 1.0,
-						volume: clip.volume || 1.0,
-						position: clip.position || 0,
-						duration: clip.duration || 0
-					}))
-				} else {
-					this.status.program = []
-				}
-				
-				// Store additional ShowCall data
-				this.status.showCallData = {
-					program: message.data.program || {},
-					preview: message.data.preview || {},
-					host: message.data.host || 'unknown',
-					restPort: message.data.restPort || '8080',
-					oscPort: message.data.oscPort || '7000',
-					timestamp: message.data.timestamp || Date.now()
-				}
-				
-				this.log('info', `Processed ${this.status.program.length} clips from ShowCall`)
-				
-				this.updateClipStates()
+		switch (message.type) {
+			case 'status_update':
+				this.applyStatus(message.data)
+				break
+
+			case 'presets_updated':
+				this.showcallPresets = Array.isArray(message.data) ? message.data : []
+				this.log('info', `ShowCall presets updated: ${this.showcallPresets.length} preset(s)${message.bank ? ` (bank ${message.bank})` : ''}`)
 				this.updateVariables()
-				this.checkFeedbacks()
-			}
-		} else if (message.type === 'composition') {
-			this.status.composition = { ...this.status.composition, ...message.data }
-			this.log('info', `Composition updated: ${JSON.stringify(message.data, null, 2)}`)
-		} else if (message.type === 'presets_updated') {
-			// Handle preset updates from ShowCall
-			this.log('info', `Presets updated from ShowCall: ${message.data.length} presets`)
-			this.showcallPresets = message.data || []
-			this.initPresets() // Regenerate presets with new data
-			this.checkFeedbacks() // Update feedbacks with new preset list
-		} else if (message.type === 'preset_executing') {
-			// Handle preset execution state updates
-			this.activePresetId = message.data.presetId
-			this.log('debug', `Preset executing: ${this.activePresetId || 'none'}`)
-			this.checkFeedbacks('preset_active') // Update preset active feedback
-		} else if (message.type === 'response') {
-			this.log('debug', `Command response: ${message.message}`)
-		} else if (message.type === 'error') {
-			this.log('error', `ShowCall error: ${message.message}`)
-		} else if (message.type === 'clip_triggered') {
-			// Handle real-time clip trigger notifications
-			this.log('info', `Clip triggered: Layer ${message.layer}, Column ${message.column}`)
-			this.checkFeedbacks()
-		} else if (message.type === 'column_triggered') {
-			// Handle real-time column trigger notifications
-			this.log('info', `Column triggered: ${message.column}`)
-			this.checkFeedbacks()
-		} else {
-			// Log unhandled message types
-			this.log('warn', `Unknown message type: ${message.type}, data: ${JSON.stringify(message, null, 2)}`)
+				this.initPresets() // Regenerate dynamic preset buttons/definitions
+				this.checkFeedbacks('preset_style', 'preset_active')
+				break
+
+			case 'preset_executing':
+				this.activePresetId = message.data?.presetId ?? null
+				this.checkFeedbacks('preset_active')
+				break
+
+			case 'command_response':
+				if (message.result && message.result.ok === false) {
+					this.log('warn', `ShowCall command failed: ${message.result.error || 'unknown error'}`)
+				}
+				break
+
+			default:
+				this.log('debug', `Unhandled ShowCall message type: ${message.type}`)
 		}
+	}
+
+	applyStatus(data) {
+		if (!data) return
+
+		this.status.connected = !!data.connected
+		if (typeof data.bpm === 'number') {
+			this.status.bpm = data.bpm
+		}
+		if (data.comp && data.comp !== '—') {
+			this.status.compositionName = data.comp
+		}
+		if (data.host) {
+			this.status.host = data.host
+		}
+
+		this.status.programClips = Array.isArray(data.programClips) ? data.programClips : []
+
+		// preview is only meaningful once a clip is queued/selected in Resolume;
+		// ShowCall sends a placeholder object otherwise.
+		this.status.preview =
+			data.preview && data.preview.clipName && data.preview.clipName !== '—' ? data.preview : null
+
+		this.updateClipStates()
+		this.updateVariables()
+		this.checkFeedbacks()
 	}
 
 	updateClipStates() {
-		// DEBUG: Log the program data being processed
-		this.log('info', `updateClipStates - Processing program: ${JSON.stringify(this.status.program, null, 2)}`)
-		
-		// Reset all states
 		this.status.layers = {}
 		this.status.columns = {}
 		this.status.clips = {}
 
-		// Process active clips in program - safely handle missing/invalid data
-		if (this.status.program && Array.isArray(this.status.program)) {
-			this.status.program.forEach((clip, index) => {
-				// Validate clip data
-				if (!clip || typeof clip.layer === 'undefined' || typeof clip.column === 'undefined') {
-					this.log('warn', `Invalid clip data at index ${index}: ${JSON.stringify(clip)}`)
-					return
-				}
-				
-				const layer = clip.layer
-				const column = clip.column
-				const clipKey = `${layer}-${column}`
+		for (const clip of this.status.programClips) {
+			if (!clip || typeof clip.layer === 'undefined' || typeof clip.column === 'undefined') continue
 
-				this.log('debug', `Processing clip ${clipKey}: ${JSON.stringify(clip)}`)
+			const { layer, column } = clip
+			const key = `${layer}-${column}`
 
-				// Track individual clips
-				this.status.clips[clipKey] = {
-					active: true,
-					layer: layer,
-					column: column,
-					clipName: clip.clipName || '',
-					opacity: clip.opacity || 1.0,
-					volume: clip.volume || 1.0,
-					position: clip.position || 0,
-					duration: clip.duration || 0
-				}
+			this.status.clips[key] = {
+				active: true,
+				clipName: clip.clipName || '',
+				layerName: clip.layerName || '',
+			}
 
-				// Track layers
-				if (!this.status.layers[layer]) {
-					this.status.layers[layer] = { active: true, clips: [] }
-				}
-				this.status.layers[layer].clips.push(clipKey)
+			if (!this.status.layers[layer]) {
+				this.status.layers[layer] = { active: true, clipCount: 0, name: clip.layerName || `Layer ${layer}` }
+			}
+			this.status.layers[layer].clipCount++
 
-				// Track columns
-				if (!this.status.columns[column]) {
-					this.status.columns[column] = { active: true, clips: [] }
-				}
-				this.status.columns[column].clips.push(clipKey)
-			})
-		} else {
-			this.log('warn', `Invalid or missing program data. Expected array, got: ${typeof this.status.program}`)
+			if (!this.status.columns[column]) {
+				this.status.columns[column] = { active: true, clipCount: 0 }
+			}
+			this.status.columns[column].clipCount++
 		}
-		
-		// DEBUG: Log final states
-		this.log('info', `Final clip states - Clips: ${Object.keys(this.status.clips).length}, Layers: ${Object.keys(this.status.layers).length}, Columns: ${Object.keys(this.status.columns).length}`)
 	}
 
-	clearAllStates() {
+	clearAllClipStates() {
 		this.status.layers = {}
 		this.status.columns = {}
 		this.status.clips = {}
-		this.status.program = []
-		this.checkFeedbacks()
+		this.status.programClips = []
 	}
+
+	// ------------------------------------------------------------------
+	// Actions
+	// ------------------------------------------------------------------
 
 	initActions() {
 		this.setActionDefinitions({
 			trigger_clip: {
 				name: 'Trigger Clip',
 				options: [
-					{
-						type: 'number',
-						label: 'Layer',
-						id: 'layer',
-						min: 1,
-						max: 8,
-						default: 1,
-						required: true
-					},
-					{
-						type: 'number',
-						label: 'Column',
-						id: 'column',
-						min: 1,
-						max: 32,
-						default: 1,
-						required: true
-					}
+					{ type: 'number', label: 'Layer', id: 'layer', min: 1, max: 8, default: 1, required: true },
+					{ type: 'number', label: 'Column', id: 'column', min: 1, max: 32, default: 1, required: true }
 				],
 				callback: async (action) => {
-					this.sendCommand('trigger_clip', {
-						layer: action.options.layer,
-						column: action.options.column
-					})
+					this.sendCommand('trigger_clip', { layer: action.options.layer, column: action.options.column })
 				}
 			},
+
 			trigger_column: {
 				name: 'Trigger Column',
 				options: [
-					{
-						type: 'number',
-						label: 'Column',
-						id: 'column',
-						min: 1,
-						max: 32,
-						default: 1,
-						required: true
-					}
+					{ type: 'number', label: 'Column', id: 'column', min: 1, max: 32, default: 1, required: true }
 				],
 				callback: async (action) => {
-					this.sendCommand('trigger_column', {
-						column: action.options.column
-					})
+					this.sendCommand('trigger_column', { column: action.options.column })
 				}
 			},
-			stop_clip: {
-				name: 'Stop Clip',
-				options: [
-					{
-						type: 'number',
-						label: 'Layer',
-						id: 'layer',
-						min: 1,
-						max: 8,
-						default: 1,
-						required: true
-					},
-					{
-						type: 'number',
-						label: 'Column',
-						id: 'column',
-						min: 1,
-						max: 32,
-						default: 1,
-						required: true
-					}
-				],
-				callback: async (action) => {
-					this.sendCommand('stop_clip', {
-						layer: action.options.layer,
-						column: action.options.column
-					})
-				}
-			},
-			stop_layer: {
-				name: 'Stop Layer',
-				options: [
-					{
-						type: 'number',
-						label: 'Layer',
-						id: 'layer',
-						min: 1,
-						max: 8,
-						default: 1,
-						required: true
-					}
-				],
-				callback: async (action) => {
-					this.sendCommand('stop_layer', {
-						layer: action.options.layer
-					})
-				}
-			},
-			stop_column: {
-				name: 'Stop Column',
-				options: [
-					{
-						type: 'number',
-						label: 'Column',
-						id: 'column',
-						min: 1,
-						max: 32,
-						default: 1,
-						required: true
-					}
-				],
-				callback: async (action) => {
-					this.sendCommand('stop_column', {
-						column: action.options.column
-					})
-				}
-			},
+
 			cut_to_program: {
 				name: 'Cut to Program',
 				options: [],
-				callback: async () => {
-					this.sendCommand('cut_to_program')
-				}
+				callback: async () => this.sendCommand('cut_to_program')
 			},
+
 			clear_all: {
 				name: 'Clear All',
 				options: [],
-				callback: async () => {
-					this.sendCommand('clear_all')
-				}
+				callback: async () => this.sendCommand('clear_all')
 			},
+
 			execute_macro: {
-				name: 'Execute Macro',
+				name: 'Execute Macro (raw steps)',
+				description: 'Send a custom macro as JSON, e.g. [{"type":"trigger","layer":1,"column":1},{"type":"cut"}]',
 				options: [
 					{
 						type: 'textinput',
-						label: 'Macro ID',
-						id: 'macro_id',
-						default: '',
-						required: true
+						label: 'Macro Steps (JSON array)',
+						id: 'macro_json',
+						default: '[]',
+						required: true,
+						useVariables: true
 					}
 				],
-				callback: async (action) => {
-					this.sendCommand('execute_macro', {
-						macroId: action.options.macro_id
-					})
+				callback: async (action, context) => {
+					const raw = await context.parseVariablesInString(action.options.macro_json)
+					try {
+						const macro = JSON.parse(raw)
+						if (!Array.isArray(macro)) throw new Error('Macro must be a JSON array')
+						this.sendCommand('execute_macro', { macro })
+					} catch (error) {
+						this.log('error', `Invalid macro JSON: ${error.message}`)
+					}
 				}
 			},
+
 			execute_preset: {
 				name: 'Execute ShowCall Preset',
-				description: 'Execute a preset from ShowCall by its ID',
+				description: 'Run a preset from ShowCall\'s active bank by its ID',
 				options: [
 					{
 						type: 'textinput',
 						label: 'Preset ID',
 						id: 'preset_id',
 						default: '',
-						tooltip: 'The ID of the preset as defined in ShowCall',
+						tooltip: 'The preset ID as defined in ShowCall (see dynamic "ShowCall Presets" buttons for real IDs)',
 						required: true
 					}
 				],
 				callback: async (action) => {
-					const presetId = action.options.preset_id
-					this.log('info', `Executing ShowCall preset: ${presetId}`)
-					this.sendCommand('execute_macro', {
-						macroId: presetId
-					})
+					this.sendCommand('execute_macro', { macroId: action.options.preset_id })
 				}
 			},
-			set_bpm: {
-				name: 'Set BPM',
-				options: [
-					{
-						type: 'number',
-						label: 'BPM',
-						id: 'bpm',
-						min: 60,
-						max: 200,
-						default: 120,
-						required: true
-					}
-				],
-				callback: async (action) => {
-					this.sendCommand('set_bpm', {
-						bpm: action.options.bpm
-					})
-				}
-			},
-			adjust_layer_opacity: {
-				name: 'Adjust Layer Opacity',
-				options: [
-					{
-						type: 'number',
-						label: 'Layer',
-						id: 'layer',
-						min: 1,
-						max: 8,
-						default: 1,
-						required: true
-					},
-					{
-						type: 'number',
-						label: 'Opacity (0-100)',
-						id: 'opacity',
-						min: 0,
-						max: 100,
-						default: 100,
-						required: true
-					}
-				],
-				callback: async (action) => {
-					this.sendCommand('set_layer_opacity', {
-						layer: action.options.layer,
-						opacity: action.options.opacity / 100
-					})
-				}
-			},
-			tap_tempo: {
-				name: 'Tap Tempo',
+
+			get_status: {
+				name: 'Refresh Status',
+				description: 'Request an immediate status snapshot from ShowCall',
 				options: [],
-				callback: async () => {
-					this.sendCommand('tap_tempo')
-				}
-			},
-			resync_composition: {
-				name: 'Resync Composition',
-				options: [],
-				callback: async () => {
-					this.sendCommand('get_composition')
-					this.sendCommand('get_status')
-				}
-			},
-			refresh_status: {
-				name: 'Refresh Status (Debug)',
-				options: [],
-				callback: async () => {
-					this.log('info', 'Manual status refresh requested')
-					this.sendCommand('get_status')
-					this.sendCommand('get_composition')
-					this.sendCommand('status')
-					this.sendCommand('get_state')
-					this.sendCommand('get_clips')
-					this.log('info', `Current internal status: ${JSON.stringify(this.status, null, 2)}`)
-				}
+				callback: async () => this.sendCommand('get_status')
 			}
 		})
 	}
 
+	// ------------------------------------------------------------------
+	// Feedbacks
+	// ------------------------------------------------------------------
+
 	initFeedbacks() {
 		this.setFeedbackDefinitions({
-			clip_active: {
-				name: 'Clip Active',
-				type: 'boolean',
-				label: 'Clip is active in program',
-				description: 'Show if a specific clip is currently active',
-				options: [
-					{
-						type: 'number',
-						label: 'Layer',
-						id: 'layer',
-						min: 1,
-						max: 8,
-						default: 1,
-						required: true
-					},
-					{
-						type: 'number',
-						label: 'Column',
-						id: 'column',
-						min: 1,
-						max: 32,
-						default: 1,
-						required: true
-					}
-				],
-				defaultStyle: {
-					bgcolor: 0xff0000, // Red
-					color: 0xffffff    // White
-				},
-				callback: (feedback) => {
-					const { layer, column } = feedback.options
-					const clipKey = `${layer}-${column}`
-					return this.status.clips[clipKey]?.active === true
-				}
-			},
-			
-			layer_active: {
-				name: 'Layer Active',
-				type: 'boolean',
-				label: 'Layer has active clips',
-				description: 'Show if any clips are active in this layer',
-				options: [
-					{
-						type: 'number',
-						label: 'Layer',
-						id: 'layer',
-						min: 1,
-						max: 8,
-						default: 1,
-						required: true
-					}
-				],
-				defaultStyle: {
-					bgcolor: 0xffaa00, // Orange
-					color: 0x000000    // Black
-				},
-				callback: (feedback) => {
-					const { layer } = feedback.options
-					return this.status.layers[layer]?.active === true
-				}
-			},
-			
-			column_active: {
-				name: 'Column Active',
-				type: 'boolean',
-				label: 'Column has active clips',
-				description: 'Show if any clips are active in this column',
-				options: [
-					{
-						type: 'number',
-						label: 'Column',
-						id: 'column',
-						min: 1,
-						max: 32,
-						default: 1,
-						required: true
-					}
-				],
-				defaultStyle: {
-					bgcolor: 0x00aaff, // Blue
-					color: 0xffffff    // White
-				},
-				callback: (feedback) => {
-					const { column } = feedback.options
-					return this.status.columns[column]?.active === true
-				}
-			},
-			
-			any_clips_active: {
-				name: 'Any Clips Active',
-				type: 'boolean',
-				label: 'Any clips are running',
-				description: 'Show if any clips are currently active',
-				options: [],
-				defaultStyle: {
-					bgcolor: 0x8a2be2, // Purple
-					color: 0xffffff    // White
-				},
-				callback: () => {
-					return this.status.program && this.status.program.length > 0
-				}
-			},
-			
 			connection_status: {
 				name: 'Connection Status',
 				type: 'boolean',
-				label: 'ShowCall connected',
-				description: 'Show connection status to ShowCall',
+				description: 'True when connected to ShowCall',
 				options: [],
-				defaultStyle: {
-					bgcolor: 0x00ff00, // Green
-					color: 0x000000    // Black
-				},
-				callback: () => {
-					return this.status.connected
-				}
+				defaultStyle: { bgcolor: 0x00aa00, color: 0xffffff },
+				callback: () => this.status.connected
 			},
-			
-			preset_active: {
-				name: 'Preset Active',
+
+			clip_active: {
+				name: 'Clip Active',
 				type: 'boolean',
-				label: 'Preset is currently executing',
-				description: 'Show when a specific preset is currently being executed',
+				description: 'True when the given layer/column clip is live in program',
 				options: [
-					{
-						type: 'textinput',
-						label: 'Preset ID',
-						id: 'preset_id',
-						default: '',
-						required: true
-					}
+					{ type: 'number', label: 'Layer', id: 'layer', min: 1, max: 8, default: 1, required: true },
+					{ type: 'number', label: 'Column', id: 'column', min: 1, max: 32, default: 1, required: true }
 				],
-				defaultStyle: {
-					bgcolor: 0xffaa00, // Bright Orange
-					color: 0x000000    // Black
-				},
+				defaultStyle: { bgcolor: 0xff0000, color: 0xffffff },
 				callback: (feedback) => {
-					const { preset_id } = feedback.options
-					return this.activePresetId === preset_id
-				}
-			},
-			
-			bpm_range: {
-				name: 'BPM in Range',
-				type: 'boolean',
-				label: 'BPM within specified range',
-				description: 'Show when BPM is within the specified range',
-				options: [
-					{
-						type: 'number',
-						label: 'Min BPM',
-						id: 'min_bpm',
-						min: 60,
-						max: 200,
-						default: 110,
-						required: true
-					},
-					{
-						type: 'number',
-						label: 'Max BPM',
-						id: 'max_bpm',
-						min: 60,
-						max: 200,
-						default: 130,
-						required: true
-					}
-				],
-				defaultStyle: {
-					bgcolor: 0x32cd32, // Lime Green
-					color: 0x000000    // Black
-				},
-				callback: (feedback) => {
-					const { min_bpm, max_bpm } = feedback.options
-					const currentBpm = this.status.bpm || 120
-					return currentBpm >= min_bpm && currentBpm <= max_bpm
-				}
-			},
-			
-			clip_opacity_level: {
-				name: 'Clip Opacity Level',
-				type: 'advanced',
-				label: 'Clip opacity affects button brightness',
-				description: 'Button brightness reflects clip opacity (0-100%)',
-				options: [
-					{
-						type: 'number',
-						label: 'Layer',
-						id: 'layer',
-						min: 1,
-						max: 8,
-						default: 1,
-						required: true
-					},
-					{
-						type: 'number',
-						label: 'Column',
-						id: 'column',
-						min: 1,
-						max: 32,
-						default: 1,
-						required: true
-					}
-				],
-				callback: (feedback) => {
-					const { layer, column } = feedback.options
-					const clipKey = `${layer}-${column}`
-					const clip = this.status.clips[clipKey]
-					
-					if (!clip || !clip.active) {
-						return {}
-					}
-					
-					const opacity = clip.opacity || 1.0
-					const brightness = Math.floor(opacity * 255)
-					
-					return {
-						bgcolor: (brightness << 16) | (brightness << 8) | brightness,
-						color: brightness > 128 ? 0x000000 : 0xffffff
-					}
-				}
-			},
-			
-			clip_position: {
-				name: 'Clip Position',
-				type: 'advanced',
-				label: 'Clip position affects button color',
-				description: 'Button color changes based on clip playback position',
-				options: [
-					{
-						type: 'number',
-						label: 'Layer',
-						id: 'layer',
-						min: 1,
-						max: 8,
-						default: 1,
-						required: true
-					},
-					{
-						type: 'number',
-						label: 'Column',
-						id: 'column',
-						min: 1,
-						max: 32,
-						default: 1,
-						required: true
-					}
-				],
-				callback: (feedback) => {
-					const { layer, column } = feedback.options
-					const clipKey = `${layer}-${column}`
-					const clip = this.status.clips[clipKey]
-					
-					if (!clip || !clip.active || !clip.duration) {
-						return {}
-					}
-					
-					const position = clip.position || 0
-					const duration = clip.duration
-					const progress = Math.min(position / duration, 1.0)
-					
-					// Color gradient from green (start) to red (end)
-					const red = Math.floor(progress * 255)
-					const green = Math.floor((1 - progress) * 255)
-					const blue = 0
-					
-					return {
-						bgcolor: (red << 16) | (green << 8) | blue,
-						color: 0xffffff
-					}
+					const key = `${feedback.options.layer}-${feedback.options.column}`
+					return this.status.clips[key]?.active === true
 				}
 			},
 
 			clip_preview: {
 				name: 'Clip in Preview',
 				type: 'boolean',
-				label: 'Clip is in preview',
-				description: 'Show if a specific clip is in preview (not program)',
+				description: 'True when the given layer/column clip is queued/selected (Resolume "Previewed") but not yet triggered',
 				options: [
-					{
-						type: 'number',
-						label: 'Layer',
-						id: 'layer',
-						min: 1,
-						max: 8,
-						default: 1,
-						required: true
-					},
-					{
-						type: 'number',
-						label: 'Column',
-						id: 'column',
-						min: 1,
-						max: 32,
-						default: 1,
-						required: true
-					}
+					{ type: 'number', label: 'Layer', id: 'layer', min: 1, max: 8, default: 1, required: true },
+					{ type: 'number', label: 'Column', id: 'column', min: 1, max: 32, default: 1, required: true }
 				],
-				defaultStyle: {
-					bgcolor: 0x888888, // Gray
-					color: 0xffffff    // White
-				},
+				defaultStyle: { bgcolor: 0x888888, color: 0xffffff },
 				callback: (feedback) => {
-					const { layer, column } = feedback.options
-					// This would need to be implemented based on preview state from ShowCall
-					return this.status.preview && 
-						   this.status.preview.layer === layer && 
-						   this.status.preview.column === column
+					const p = this.status.preview
+					return !!p && p.layer === feedback.options.layer && p.column === feedback.options.column
+				}
+			},
+
+			layer_active: {
+				name: 'Layer Active',
+				type: 'boolean',
+				description: 'True when any clip is live in this layer',
+				options: [
+					{ type: 'number', label: 'Layer', id: 'layer', min: 1, max: 8, default: 1, required: true }
+				],
+				defaultStyle: { bgcolor: 0xffaa00, color: 0x000000 },
+				callback: (feedback) => this.status.layers[feedback.options.layer]?.active === true
+			},
+
+			column_active: {
+				name: 'Column Active',
+				type: 'boolean',
+				description: 'True when any clip is live in this column',
+				options: [
+					{ type: 'number', label: 'Column', id: 'column', min: 1, max: 32, default: 1, required: true }
+				],
+				defaultStyle: { bgcolor: 0x00aaff, color: 0xffffff },
+				callback: (feedback) => this.status.columns[feedback.options.column]?.active === true
+			},
+
+			any_clips_active: {
+				name: 'Any Clips Active',
+				type: 'boolean',
+				description: 'True when at least one clip is live in program',
+				options: [],
+				defaultStyle: { bgcolor: 0x8a2be2, color: 0xffffff },
+				callback: () => this.status.programClips.length > 0
+			},
+
+			bpm_range: {
+				name: 'BPM in Range',
+				type: 'boolean',
+				description: 'True when the current BPM is within the given range',
+				options: [
+					{ type: 'number', label: 'Min BPM', id: 'min_bpm', min: 20, max: 400, default: 110, required: true },
+					{ type: 'number', label: 'Max BPM', id: 'max_bpm', min: 20, max: 400, default: 130, required: true }
+				],
+				defaultStyle: { bgcolor: 0x32cd32, color: 0x000000 },
+				callback: (feedback) => {
+					if (typeof this.status.bpm !== 'number') return false
+					return this.status.bpm >= feedback.options.min_bpm && this.status.bpm <= feedback.options.max_bpm
+				}
+			},
+
+			preset_active: {
+				name: 'Preset Executing',
+				type: 'boolean',
+				description: 'True while the given ShowCall preset ID is actively executing',
+				options: [
+					{ type: 'textinput', label: 'Preset ID', id: 'preset_id', default: '', required: true }
+				],
+				defaultStyle: { bgcolor: 0xffaa00, color: 0x000000 },
+				callback: (feedback) => this.activePresetId === feedback.options.preset_id
+			},
+
+			// This is the core of live preset sync: rather than baking a preset's
+			// label/color into a button only once (at drag time), this feedback
+			// looks up the CURRENT preset data by ID every time ShowCall pushes an
+			// update, so already-placed buttons stay accurate even if the preset's
+			// label/color changes, or the preset is removed entirely.
+			preset_style: {
+				name: 'ShowCall Preset Style (live)',
+				type: 'advanced',
+				description: 'Looks up a preset by ID from ShowCall\'s live preset list and applies its label/color. Keeps already-placed buttons accurate as presets change.',
+				options: [
+					{ type: 'textinput', label: 'Preset ID', id: 'preset_id', default: '', required: true }
+				],
+				callback: (feedback) => {
+					const preset = this.showcallPresets.find((p) => p.id === feedback.options.preset_id)
+
+					if (!preset) {
+						return { text: '(removed)', bgcolor: 0x333333, color: 0x999999 }
+					}
+
+					const bgcolor = parseHexColor(preset.color) ?? 0x666666
+					const color = readableTextColor(bgcolor)
+					const text = preset.hotkey ? `${preset.label}\\n[${preset.hotkey}]` : preset.label
+
+					return { text, bgcolor, color }
 				}
 			}
 		})
 	}
 
+	// ------------------------------------------------------------------
+	// Variables
+	// ------------------------------------------------------------------
+
 	initVariables() {
-		// Define all variables for dynamic button updates
 		const variableDefs = [
 			{ variableId: 'connection_status', name: 'Connection Status' },
-			{ variableId: 'bpm', name: 'BPM' },
-			{ variableId: 'program_clips', name: 'Program Clips Count' },
-			{ variableId: 'program_clip_names', name: 'Program Clip Names' },
-			{ variableId: 'composition_name', name: 'Composition Name' },
-			{ variableId: 'composition_size', name: 'Composition Size (LxC)' },
-			{ variableId: 'active_layers', name: 'Active Layers Count' },
-			{ variableId: 'active_columns', name: 'Active Columns Count' },
-			{ variableId: 'last_triggered_clip', name: 'Last Triggered Clip' },
 			{ variableId: 'connection_uptime', name: 'Connection Uptime' },
-			// Layer status and name variables (for dynamic button labels)
-			{ variableId: 'layer_1_status', name: 'Layer 1 Status' },
-			{ variableId: 'layer_1_name', name: 'Layer 1 Custom Name' },
-			{ variableId: 'layer_2_status', name: 'Layer 2 Status' },
-			{ variableId: 'layer_2_name', name: 'Layer 2 Custom Name' },
-			{ variableId: 'layer_3_status', name: 'Layer 3 Status' },
-			{ variableId: 'layer_3_name', name: 'Layer 3 Custom Name' },
-			{ variableId: 'layer_4_status', name: 'Layer 4 Status' },
-			{ variableId: 'layer_4_name', name: 'Layer 4 Custom Name' },
-			{ variableId: 'layer_5_status', name: 'Layer 5 Status' },
-			{ variableId: 'layer_5_name', name: 'Layer 5 Custom Name' },
-			{ variableId: 'layer_6_status', name: 'Layer 6 Status' },
-			{ variableId: 'layer_6_name', name: 'Layer 6 Custom Name' },
-			{ variableId: 'layer_7_status', name: 'Layer 7 Status' },
-			{ variableId: 'layer_7_name', name: 'Layer 7 Custom Name' },
-			{ variableId: 'layer_8_status', name: 'Layer 8 Status' },
-			{ variableId: 'layer_8_name', name: 'Layer 8 Custom Name' },
-			// Column name variables (for dynamic button labels)
-			{ variableId: 'column_1_name', name: 'Column 1 Name' },
-			{ variableId: 'column_2_name', name: 'Column 2 Name' },
-			{ variableId: 'column_3_name', name: 'Column 3 Name' },
-			{ variableId: 'column_4_name', name: 'Column 4 Name' },
-			{ variableId: 'column_5_name', name: 'Column 5 Name' },
-			{ variableId: 'column_6_name', name: 'Column 6 Name' },
-			{ variableId: 'column_7_name', name: 'Column 7 Name' },
-			{ variableId: 'column_8_name', name: 'Column 8 Name' },
-			// Clip name variables (for dynamic button labels)
-			{ variableId: 'clip_1_1_name', name: 'Layer 1 Clip 1 Name' },
-			{ variableId: 'clip_1_2_name', name: 'Layer 1 Clip 2 Name' },
-			{ variableId: 'clip_1_3_name', name: 'Layer 1 Clip 3 Name' },
-			{ variableId: 'clip_1_4_name', name: 'Layer 1 Clip 4 Name' },
-			{ variableId: 'clip_1_5_name', name: 'Layer 1 Clip 5 Name' },
-			{ variableId: 'clip_1_6_name', name: 'Layer 1 Clip 6 Name' },
-			{ variableId: 'clip_1_7_name', name: 'Layer 1 Clip 7 Name' },
-			{ variableId: 'clip_1_8_name', name: 'Layer 1 Clip 8 Name' },
-			// Preset name variables (for dynamic button labels)
-			{ variableId: 'preset_1_name', name: 'Preset 1 Name' },
-			{ variableId: 'preset_2_name', name: 'Preset 2 Name' },
-			{ variableId: 'preset_3_name', name: 'Preset 3 Name' },
-			{ variableId: 'preset_4_name', name: 'Preset 4 Name' },
-			{ variableId: 'preset_5_name', name: 'Preset 5 Name' },
-			{ variableId: 'preset_6_name', name: 'Preset 6 Name' },
-			{ variableId: 'preset_7_name', name: 'Preset 7 Name' },
-			{ variableId: 'preset_8_name', name: 'Preset 8 Name' },
-			// ShowCall specific variables
-			{ variableId: 'current_program_clip', name: 'Current Program Clip' },
-			{ variableId: 'current_preview_clip', name: 'Current Preview Clip' },
+			{ variableId: 'bpm', name: 'BPM' },
+			{ variableId: 'composition_name', name: 'Composition Name' },
 			{ variableId: 'showcall_host', name: 'ShowCall Host' },
-			{ variableId: 'showcall_timestamp', name: 'Last Update Time' },
-			// Macro/Preset name variables
-			{ variableId: 'last_executed_preset', name: 'Last Executed Preset' },
-			{ variableId: 'available_presets_count', name: 'Available Presets Count' }
+			{ variableId: 'program_clip_count', name: 'Active Clip Count' },
+			{ variableId: 'program_clip_names', name: 'Active Clip Names' },
+			{ variableId: 'preview_clip', name: 'Preview Clip' },
+			{ variableId: 'active_layer_count', name: 'Active Layer Count' },
+			{ variableId: 'active_column_count', name: 'Active Column Count' },
+			{ variableId: 'available_presets_count', name: 'Available Presets Count' },
+			{ variableId: 'active_preset_label', name: 'Active Preset Label' },
 		]
-		
-		this.setVariableDefinitions(variableDefs)
 
-		// Initialize default values for all variables
-		const initialValues = {
-			connection_status: 'Disconnected',
-			bpm: 120,
-			program_clips: 0,
-			program_clip_names: '',
-			composition_name: 'Unknown',
-			composition_size: '8x32',
-			active_layers: 0,
-			active_columns: 0,
-			last_triggered_clip: 'None',
-			connection_uptime: '0s',
-			current_program_clip: 'None',
-			current_preview_clip: 'None',
-			showcall_host: 'Unknown',
-			showcall_timestamp: 'Never',
-			last_executed_preset: 'None',
-			available_presets_count: 0
+		for (let i = 1; i <= this.numLayers; i++) {
+			variableDefs.push({ variableId: `layer_${i}_status`, name: `Layer ${i} Status` })
+			variableDefs.push({ variableId: `layer_${i}_name`, name: `Layer ${i} Name (from active clip)` })
 		}
-		
-		// Initialize layer status and custom name variables
-		for (let i = 1; i <= 8; i++) {
-			initialValues[`layer_${i}_status`] = 'Inactive'
-			initialValues[`layer_${i}_name`] = `Layer ${i}`
-		}
-		
-		// Initialize column name variables
-		for (let i = 1; i <= 8; i++) {
-			initialValues[`column_${i}_name`] = `Column ${i}`
-		}
-		
-		// Initialize clip name variables for first 2 layers
-		for (let layer = 1; layer <= 2; layer++) {
-			for (let column = 1; column <= 8; column++) {
-				initialValues[`clip_${layer}_${column}_name`] = `Clip L${layer}C${column}`
+
+		for (let layer = 1; layer <= this.numLayers; layer++) {
+			for (let column = 1; column <= this.numColumns; column++) {
+				variableDefs.push({ variableId: `clip_${layer}_${column}_name`, name: `Layer ${layer} / Column ${column} Clip Name` })
 			}
 		}
-		
-		this.setVariableValues(initialValues)
+
+		// One slot per currently known preset, keyed by position - lets an
+		// already-placed button reference $(showcall:preset_N_name) and still
+		// receive live updates without needing preset_style feedback.
+		const presetSlots = Math.max(this.showcallPresets.length, 16)
+		for (let i = 1; i <= presetSlots; i++) {
+			variableDefs.push({ variableId: `preset_${i}_name`, name: `Preset Slot ${i} Name` })
+			variableDefs.push({ variableId: `preset_${i}_id`, name: `Preset Slot ${i} ID` })
+		}
+
+		this.setVariableDefinitions(variableDefs)
+		this.updateVariables()
 	}
 
 	updateVariables() {
-		// Safely handle program data
-		const program = Array.isArray(this.status.program) ? this.status.program : []
-		
-		const clipNames = program.map(clip => 
-			clip.clipName ? `L${clip.layer}C${clip.column}:${clip.clipName}` : `L${clip.layer}C${clip.column}`
-		).join(', ')
-		
-		const activeLayerCount = Object.keys(this.status.layers || {}).length
-		const activeColumnCount = Object.keys(this.status.columns || {}).length
-		
-		// Calculate uptime
-		const uptimeMs = this.status.connected ? Date.now() - this.lastStatusUpdate : 0
-		const uptimeSeconds = Math.floor(uptimeMs / 1000)
-		const uptimeStr = this.formatUptime(uptimeSeconds)
-		
-		// Update layer status variables and extract names from ShowCall data
-		const layerVariables = {}
-		const composition = this.status.composition || {}
-		for (let i = 1; i <= 8; i++) {
-			const layerActive = this.status.layers?.[i]?.active
-			const clipCount = this.status.layers?.[i]?.clips?.length || 0
-			layerVariables[`layer_${i}_status`] = layerActive ? `Active (${clipCount})` : 'Inactive'
-			
-			// Try to get layer name from ShowCall data, fallback to default
-			// This will be populated when ShowCall sends layer metadata
-			if (!layerVariables[`layer_${i}_name`]) {
-				layerVariables[`layer_${i}_name`] = `Layer ${i}`
+		const values = {}
+
+		values.connection_status = this.status.connected ? 'Connected' : 'Disconnected'
+		values.connection_uptime = this.connectedSince ? formatUptime(Math.floor((Date.now() - this.connectedSince) / 1000)) : '0s'
+		values.bpm = this.status.bpm ?? '—'
+		values.composition_name = this.status.compositionName || 'Unknown'
+		values.showcall_host = this.status.host || 'Unknown'
+
+		values.program_clip_count = this.status.programClips.length
+		values.program_clip_names = this.status.programClips
+			.map((c) => (c.clipName ? `L${c.layer}C${c.column}:${c.clipName}` : `L${c.layer}C${c.column}`))
+			.join(', ') || 'None'
+
+		values.preview_clip = this.status.preview
+			? `L${this.status.preview.layer}C${this.status.preview.column}: ${this.status.preview.clipName}`
+			: 'None'
+
+		values.active_layer_count = Object.keys(this.status.layers).length
+		values.active_column_count = Object.keys(this.status.columns).length
+
+		for (let i = 1; i <= this.numLayers; i++) {
+			const layer = this.status.layers[i]
+			values[`layer_${i}_status`] = layer?.active ? `Active (${layer.clipCount})` : 'Inactive'
+			values[`layer_${i}_name`] = layer?.name || `Layer ${i}`
+		}
+
+		for (let layer = 1; layer <= this.numLayers; layer++) {
+			for (let column = 1; column <= this.numColumns; column++) {
+				const clip = this.status.clips[`${layer}-${column}`]
+				values[`clip_${layer}_${column}_name`] = clip?.clipName || ''
 			}
 		}
-		
-		// Update column name variables from ShowCall composition data
-		const columnVariables = {}
-		if (composition.columns) {
-			for (let i = 1; i <= Math.min(composition.columns, 32); i++) {
-				// Names will be set from ShowCall metadata when available
-				columnVariables[`column_${i}_name`] = `Column ${i}`
-			}
+
+		values.available_presets_count = this.showcallPresets.length
+		const activePreset = this.showcallPresets.find((p) => p.id === this.activePresetId)
+		values.active_preset_label = activePreset ? activePreset.label : 'None'
+
+		const presetSlots = Math.max(this.showcallPresets.length, 16)
+		for (let i = 1; i <= presetSlots; i++) {
+			const preset = this.showcallPresets[i - 1]
+			values[`preset_${i}_name`] = preset ? preset.label : ''
+			values[`preset_${i}_id`] = preset ? preset.id : ''
 		}
-		
-		// Update clip name variables from program data
-		const clipVariables = {}
-		if (program && Array.isArray(program)) {
-			program.forEach(clip => {
-				if (clip.layer && clip.column && clip.clipName) {
-					// Store clip name for dynamic button labels (layer 1-2, column 1-8 for now)
-					if (clip.layer <= 2 && clip.column <= 8) {
-						clipVariables[`clip_${clip.layer}_${clip.column}_name`] = clip.clipName
-					}
-				}
-			})
-		}
-		
-		// Update preset name variables from ShowCall presets
-		const presetVariables = {}
-		if (this.showcallPresets && Array.isArray(this.showcallPresets)) {
-			this.showcallPresets.forEach((preset, index) => {
-				if (index < 8) { // First 8 presets
-					presetVariables[`preset_${index + 1}_name`] = preset.label || preset.id
-				}
-			})
-		}
-		
-		// ShowCall specific data
-		const showCallData = this.status.showCallData || {}
-		const currentProgram = showCallData.program || {}
-		const currentPreview = showCallData.preview || {}
-		
-		const programClipDisplay = currentProgram.clipName && currentProgram.clipName !== '—' 
-			? `L${currentProgram.layer}C${currentProgram.column}: ${currentProgram.clipName}` 
-			: 'None'
-			
-		const previewClipDisplay = currentPreview.clipName && currentPreview.clipName !== '—' 
-			? `L${currentPreview.layer}C${currentPreview.column}: ${currentPreview.clipName}` 
-			: 'None'
-		
-		const timestampDisplay = showCallData.timestamp 
-			? new Date(showCallData.timestamp).toLocaleTimeString() 
-			: 'Never'
-		
-		const variableUpdate = {
-			connection_status: this.status.connected ? 'Connected' : 'Disconnected',
-			bpm: this.status.bpm || 120,
-			program_clips: program.length,
-			program_clip_names: clipNames || 'None',
-			composition_name: this.status.composition?.name || 'Unknown',
-			composition_size: `${this.status.composition?.layers || 8}x${this.status.composition?.columns || 32}`,
-			active_layers: activeLayerCount,
-			active_columns: activeColumnCount,
-			connection_uptime: uptimeStr,
-			current_program_clip: programClipDisplay,
-			current_preview_clip: previewClipDisplay,
-			showcall_host: showCallData.host || 'Unknown',
-			showcall_timestamp: timestampDisplay,
-			available_presets_count: this.showcallPresets?.length || 0,
-			...layerVariables,
-			...columnVariables,
-			...clipVariables,
-			...presetVariables
-		}
-		
-		// DEBUG: Log variable updates
-		this.log('info', `Updating variables with real ShowCall data: ${JSON.stringify(variableUpdate, null, 2)}`)
-		
-		this.setVariableValues(variableUpdate)
+
+		this.setVariableValues(values)
 	}
 
-	formatUptime(seconds) {
-		if (seconds < 60) return `${seconds}s`
-		if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
-		const hours = Math.floor(seconds / 3600)
-		const minutes = Math.floor((seconds % 3600) / 60)
-		return `${hours}h ${minutes}m`
-	}
+	// ------------------------------------------------------------------
+	// Presets (button templates)
+	// ------------------------------------------------------------------
 
 	initPresets() {
 		const presets = []
 
-		// Basic control presets with enhanced feedback
 		presets.push({
 			type: 'button',
 			category: 'Basic Controls',
 			name: 'Cut to Program',
-			style: {
-				text: 'CUT',
-				size: '18',
-				color: 0xffffff,
-				bgcolor: 0x8b0000
-			},
-			steps: [
-				{
-					down: [
-						{
-							actionId: 'cut_to_program'
-						}
-					],
-					up: []
-				}
-			],
-			feedbacks: [
-				{
-					feedbackId: 'connection_status',
-					options: {},
-					style: {
-						bgcolor: 0x006400, // Dark green when connected
-						color: 0xffffff
-					}
-				}
-			]
+			style: { text: 'CUT', size: '18', color: 0xffffff, bgcolor: 0x8b0000 },
+			steps: [{ down: [{ actionId: 'cut_to_program' }], up: [] }],
+			feedbacks: [{ feedbackId: 'connection_status', options: {}, style: { bgcolor: 0x006400, color: 0xffffff } }]
 		})
 
 		presets.push({
 			type: 'button',
 			category: 'Basic Controls',
 			name: 'Clear All',
-			style: {
-				text: 'CLEAR\\nALL',
-				size: '14',
-				color: 0xffffff,
-				bgcolor: 0x654321
-			},
-			steps: [
-				{
-					down: [
-						{
-							actionId: 'clear_all'
-						}
-					],
-					up: []
-				}
-			],
-			feedbacks: [
-				{
-					feedbackId: 'any_clips_active',
-					options: {},
-					style: {
-						bgcolor: 0xff4500, // Orange when clips are active
-						color: 0xffffff
-					}
-				}
-			]
+			style: { text: 'CLEAR\\nALL', size: '14', color: 0xffffff, bgcolor: 0x654321 },
+			steps: [{ down: [{ actionId: 'clear_all' }], up: [] }],
+			feedbacks: [{ feedbackId: 'any_clips_active', options: {}, style: { bgcolor: 0xff4500, color: 0xffffff } }]
 		})
 
-		// Tap Tempo with BPM feedback
 		presets.push({
 			type: 'button',
 			category: 'Basic Controls',
-			name: 'Tap Tempo',
-			style: {
-				text: 'TAP\\n$(showcall:bpm)',
-				size: '14',
-				color: 0xffffff,
-				bgcolor: 0x483d8b
-			},
-			steps: [
-				{
-					down: [
-						{
-							actionId: 'tap_tempo'
-						}
-					],
-					up: []
-				}
-			],
-			feedbacks: [
-				{
-					feedbackId: 'bpm_range',
-					options: {
-						min_bpm: 110,
-						max_bpm: 130
-					},
-					style: {
-						bgcolor: 0x32cd32, // Lime green in range
-						color: 0x000000
-					}
-				}
-			]
+			name: 'BPM Display',
+			style: { text: 'BPM\\n$(showcall:bpm)', size: '14', color: 0xffffff, bgcolor: 0x483d8b },
+			steps: [{ down: [{ actionId: 'get_status' }], up: [] }],
+			feedbacks: [{ feedbackId: 'bpm_range', options: { min_bpm: 110, max_bpm: 130 }, style: { bgcolor: 0x32cd32, color: 0x000000 } }]
 		})
 
-		// Resync button
-		presets.push({
-			type: 'button',
-			category: 'Basic Controls',
-			name: 'Resync',
-			style: {
-				text: 'RESYNC',
-				size: '14',
-				color: 0xffffff,
-				bgcolor: 0x2f4f4f
-			},
-			steps: [
-				{
-					down: [
-						{
-							actionId: 'resync_composition'
-						}
-					],
-					up: []
-				}
-			],
-			feedbacks: [
-				{
-					feedbackId: 'connection_status',
-					options: {}
-				}
-			]
-		})
-
-		// Enhanced clip trigger presets with multiple feedback types and DYNAMIC NAMES
-		for (let layer = 1; layer <= 4; layer++) {
-			for (let column = 1; column <= 8; column++) {
+		// Clip trigger grid, sized from the module's configured layers/columns
+		for (let layer = 1; layer <= this.numLayers; layer++) {
+			for (let column = 1; column <= this.numColumns; column++) {
 				presets.push({
 					type: 'button',
-					category: `Layer ${layer}`,
-					name: `Layer ${layer} Clip ${column}`,
-					style: {
-						// Dynamic button text that updates from ShowCall clip names
-						text: `$(showcall:clip_${layer}_${column}_name)`,
-						size: '14',
-						color: 0xffffff,
-						bgcolor: 0x202020
-					},
-					steps: [
-						{
-							down: [
-								{
-									actionId: 'trigger_clip',
-									options: {
-										layer: layer,
-										column: column
-									}
-								}
-							],
-							up: []
-						}
-					],
+					category: `Layer ${layer} Clips`,
+					name: `L${layer}C${column}`,
+					style: { text: `$(showcall:clip_${layer}_${column}_name)`, size: '14', color: 0xffffff, bgcolor: 0x202020 },
+					steps: [{ down: [{ actionId: 'trigger_clip', options: { layer, column } }], up: [] }],
 					feedbacks: [
-						{
-							feedbackId: 'clip_active',
-							options: {
-								layer: layer,
-								column: column
-							},
-							style: {
-								bgcolor: 0xff0000, // Red when active
-								color: 0xffffff
-							}
-						},
-						{
-							feedbackId: 'clip_opacity_level',
-							options: {
-								layer: layer,
-								column: column
-							}
-						}
+						{ feedbackId: 'clip_active', options: { layer, column }, style: { bgcolor: 0xff0000, color: 0xffffff } },
+						{ feedbackId: 'clip_preview', options: { layer, column } }
 					]
 				})
 			}
 		}
 
-		// Enhanced column trigger presets with column feedback and DYNAMIC NAMES
-		for (let column = 1; column <= 8; column++) {
+		// Column triggers
+		for (let column = 1; column <= this.numColumns; column++) {
 			presets.push({
 				type: 'button',
 				category: 'Columns',
 				name: `Column ${column}`,
-				style: {
-					// Dynamic button text using column names from ShowCall
-					text: `$(showcall:column_${column}_name)`,
-					size: '14',
-					color: 0xffffff,
-					bgcolor: 0x2c3e50
-				},
-				steps: [
-					{
-						down: [
-							{
-								actionId: 'trigger_column',
-								options: {
-									column: column
-								}
-							}
-						],
-						up: []
-					}
-				],
-				feedbacks: [
-					{
-						feedbackId: 'column_active',
-						options: {
-							column: column
-						},
-						style: {
-							bgcolor: 0x00aaff, // Blue when active
-							color: 0xffffff
-						}
-					}
-				]
+				style: { text: `COL\\n${column}`, size: '14', color: 0xffffff, bgcolor: 0x2c3e50 },
+				steps: [{ down: [{ actionId: 'trigger_column', options: { column } }], up: [] }],
+				feedbacks: [{ feedbackId: 'column_active', options: { column }, style: { bgcolor: 0x00aaff, color: 0xffffff } }]
 			})
 		}
 
-		// Enhanced layer status indicators with DYNAMIC NAMES
-		for (let layer = 1; layer <= 8; layer++) {
+		// Layer indicators (status only - ShowCall has no "stop layer" capability)
+		for (let layer = 1; layer <= this.numLayers; layer++) {
 			presets.push({
 				type: 'button',
 				category: 'Layer Status',
 				name: `Layer ${layer} Status`,
-				style: {
-					// Dynamic button text showing layer name and status
-					text: `$(showcall:layer_${layer}_name)\\n$(showcall:layer_${layer}_status)`,
-					size: '12',
-					color: 0xffffff,
-					bgcolor: 0x2c2c2c
-				},
-				steps: [
-					{
-						down: [
-							{
-								actionId: 'stop_layer',
-								options: {
-									layer: layer
-								}
-							}
-						],
-						up: []
-					}
-				],
-				feedbacks: [
-					{
-						feedbackId: 'layer_active',
-						options: {
-							layer: layer
-						},
-						style: {
-							bgcolor: 0xffaa00, // Orange when active
-							color: 0x000000
-						}
-					}
-				]
+				style: { text: `$(showcall:layer_${layer}_name)\\n$(showcall:layer_${layer}_status)`, size: '12', color: 0xffffff, bgcolor: 0x2c2c2c },
+				steps: [{ down: [], up: [] }],
+				feedbacks: [{ feedbackId: 'layer_active', options: { layer }, style: { bgcolor: 0xffaa00, color: 0x000000 } }]
 			})
 		}
 
-		// Enhanced macro presets with better styling and feedback
-		const enhancedMacros = [
-			{ id: 'walkin', label: 'Walk-In', color: 0x0ea5e9, textColor: 0xffffff },
-			{ id: 'sermon', label: 'Sermon', color: 0x22c55e, textColor: 0x000000 },
-			{ id: 'baptism', label: 'Baptism', color: 0x8b5cf6, textColor: 0xffffff },
-			{ id: 'closing', label: 'Closing', color: 0xf59e0b, textColor: 0x000000 },
-			{ id: 'worship', label: 'Worship', color: 0xe11d48, textColor: 0xffffff },
-			{ id: 'prayer', label: 'Prayer', color: 0x7c3aed, textColor: 0xffffff },
-			{ id: 'offering', label: 'Offering', color: 0x059669, textColor: 0xffffff },
-			{ id: 'announce', label: 'Announce', color: 0xdc2626, textColor: 0xffffff }
-		]
+		// Dynamic ShowCall presets - the buttons themselves reference stable
+		// preset IDs, and preset_style feedback keeps their look live-updated.
+		for (const preset of this.showcallPresets) {
+			const bgcolor = parseHexColor(preset.color) ?? 0x666666
+			const color = readableTextColor(bgcolor)
 
-		enhancedMacros.forEach(macro => {
 			presets.push({
 				type: 'button',
-				category: 'Scene Macros',
-				name: macro.label,
+				category: 'ShowCall Presets',
+				name: preset.label || preset.id,
 				style: {
-					text: macro.label,
+					text: preset.hotkey ? `${preset.label}\\n[${preset.hotkey}]` : preset.label,
 					size: '12',
-					color: macro.textColor,
-					bgcolor: macro.color
+					color,
+					bgcolor
 				},
-				steps: [
-					{
-						down: [
-							{
-								actionId: 'execute_macro',
-								options: {
-									macro_id: macro.id
-								}
-							}
-						],
-						up: []
-					}
-				],
+				steps: [{ down: [{ actionId: 'execute_preset', options: { preset_id: preset.id } }], up: [] }],
 				feedbacks: [
-					{
-						feedbackId: 'connection_status',
-						options: {},
-						style: {
-							bgcolor: macro.color | 0x404040, // Darker when disconnected
-							color: macro.textColor
-						}
-					},
-					{
-						feedbackId: 'any_clips_active',
-						options: {},
-						style: {
-							text: `${macro.label}\\n$(showcall:program_clips)`,
-							size: '10'
-						}
-					}
+					{ feedbackId: 'preset_style', options: { preset_id: preset.id } },
+					{ feedbackId: 'preset_active', options: { preset_id: preset.id }, style: { bgcolor: 0xffaa00, color: 0x000000 } },
+					{ feedbackId: 'connection_status', options: {}, style: { bgcolor: 0x333333, color: 0x999999 } }
 				]
 			})
-		})
-
-		// ============================================
-		// DYNAMIC SHOWCALL PRESETS
-		// ============================================
-		// Generate buttons from ShowCall preset definitions
-		if (this.showcallPresets && this.showcallPresets.length > 0) {
-			this.log('info', `Creating ${this.showcallPresets.length} dynamic preset buttons from ShowCall`)
-			
-			this.showcallPresets.forEach((preset, index) => {
-				// Parse color (handles both hex strings and numbers)
-				let bgColor = 0x666666 // Default gray
-				if (preset.color) {
-					if (typeof preset.color === 'string') {
-						bgColor = parseInt(preset.color.replace('#', ''), 16)
-					} else {
-						bgColor = preset.color
-					}
-				}
-				
-				// Choose text color based on background brightness
-				const r = (bgColor >> 16) & 0xff
-				const g = (bgColor >> 8) & 0xff
-				const b = bgColor & 0xff
-				const brightness = (r * 299 + g * 587 + b * 114) / 1000
-				const textColor = brightness > 128 ? 0x000000 : 0xffffff
-				
-				// Create preset button with DYNAMIC LABEL from variable
-				presets.push({
-					type: 'button',
-					category: 'ShowCall Presets',
-					name: preset.label || preset.id,
-					style: {
-						// Pull preset name from variable - updates in real-time from ShowCall
-						text: index < 8 ? `$(showcall:preset_${index + 1}_name)` : preset.label || preset.id,
-						size: '12',
-						color: textColor,
-						bgcolor: bgColor
-					},
-					steps: [
-						{
-							down: [
-								{
-									actionId: 'execute_preset',
-									options: {
-										preset_id: preset.id
-									}
-								}
-							],
-							up: []
-						}
-					],
-					feedbacks: [
-						{
-							feedbackId: 'preset_active',
-							options: {
-								preset_id: preset.id
-							},
-							style: {
-								bgcolor: 0xffaa00, // Bright orange when executing
-								color: 0x000000
-							}
-						},
-						{
-							feedbackId: 'connection_status',
-							options: {},
-							style: {
-								bgcolor: bgColor & 0x808080, // Darker when disconnected
-								color: textColor
-							}
-						}
-					]
-				})
-			})
-			
-			this.log('info', `Added ${this.showcallPresets.length} ShowCall preset buttons with dynamic names`)
-		} else {
-			this.log('info', 'No ShowCall presets available yet - waiting for data from ShowCall')
 		}
 
-		// System status preset with enhanced real-time information
 		presets.push({
 			type: 'button',
 			category: 'System',
 			name: 'System Status',
-			style: {
-				text: '$(showcall:connection_status)\\n$(showcall:program_clips) clips\\n$(showcall:bpm) BPM',
-				size: '10',
-				color: 0xffffff,
-				bgcolor: 0x2c2c2c
-			},
-			steps: [
-				{
-					down: [],
-					up: []
-				}
-			],
+			style: { text: '$(showcall:connection_status)\\n$(showcall:program_clip_count) clips\\n$(showcall:bpm) BPM', size: '10', color: 0xffffff, bgcolor: 0x2c2c2c },
+			steps: [{ down: [], up: [] }],
 			feedbacks: [
-				{
-					feedbackId: 'connection_status',
-					options: {},
-					style: {
-						bgcolor: 0x008000, // Green when connected
-						color: 0xffffff
-					}
-				},
-				{
-					feedbackId: 'any_clips_active',
-					options: {},
-					style: {
-						color: 0xffff00 // Yellow text when clips active
-					}
-				}
+				{ feedbackId: 'connection_status', options: {}, style: { bgcolor: 0x008000, color: 0xffffff } },
+				{ feedbackId: 'any_clips_active', options: {}, style: { color: 0xffff00 } }
 			]
-		})
-
-		// BPM Control presets
-		const bpmPresets = [
-			{ bpm: 100, label: 'Slow' },
-			{ bpm: 120, label: 'Normal' },
-			{ bpm: 140, label: 'Fast' },
-			{ bpm: 160, label: 'Very Fast' }
-		]
-
-		bpmPresets.forEach(bpm => {
-			presets.push({
-				type: 'button',
-				category: 'BPM Control',
-				name: `Set BPM ${bpm.bpm}`,
-				style: {
-					text: `${bpm.label}\\n${bpm.bpm}`,
-					size: '12',
-					color: 0xffffff,
-					bgcolor: 0x4a5568
-				},
-				steps: [
-					{
-						down: [
-							{
-								actionId: 'set_bpm',
-								options: {
-									bpm: bpm.bpm
-								}
-							}
-						],
-						up: []
-					}
-				],
-				feedbacks: [
-					{
-						feedbackId: 'bpm_range',
-						options: {
-							min_bpm: bpm.bpm - 5,
-							max_bpm: bpm.bpm + 5
-						},
-						style: {
-							bgcolor: 0x00ff00, // Green when in range
-							color: 0x000000
-						}
-					}
-				]
-			})
 		})
 
 		this.setPresetDefinitions(presets)
 	}
+}
+
+function formatUptime(seconds) {
+	if (seconds < 60) return `${seconds}s`
+	if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+	const hours = Math.floor(seconds / 3600)
+	const minutes = Math.floor((seconds % 3600) / 60)
+	return `${hours}h ${minutes}m`
+}
+
+// Accepts "#rrggbb", "rrggbb", or a numeric value. Returns a 24-bit int or null.
+function parseHexColor(color) {
+	if (typeof color === 'number') return color & 0xffffff
+	if (typeof color === 'string') {
+		const hex = color.replace('#', '')
+		const parsed = parseInt(hex, 16)
+		return Number.isNaN(parsed) ? null : parsed
+	}
+	return null
+}
+
+function readableTextColor(bgcolor) {
+	const r = (bgcolor >> 16) & 0xff
+	const g = (bgcolor >> 8) & 0xff
+	const b = bgcolor & 0xff
+	const brightness = (r * 299 + g * 587 + b * 114) / 1000
+	return brightness > 128 ? 0x000000 : 0xffffff
 }
 
 runEntrypoint(ShowCallInstance, [])

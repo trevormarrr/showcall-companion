@@ -1,5 +1,50 @@
 # ShowCall Companion Module - Changelog
 
+## [2.3.0] - 2026-07-26
+
+This release rewrites the module against ShowCall's *actual* WebSocket protocol
+after auditing `server.mjs` directly, and fixes real bugs in both this module
+and ShowCall's server that were breaking live preset sync.
+
+### Fixed (ShowCall server)
+- Server only sent the legacy `presets.json` file on Companion connect, instead
+  of the actually-active preset bank. New connections could show the wrong presets.
+- Switching preset banks in ShowCall never notified connected Companion clients.
+- Clearing a preset bank never notified connected Companion clients.
+- Status updates (BPM, active clips, connection state) only reached Companion
+  while the ShowCall UI's own dashboard was open (tied to its SSE connection).
+  Companion now gets its own independent 1s status poll whenever at least one
+  Companion client is connected, regardless of whether the UI is visible.
+- The "preview clip" field was always `null` - the server parsed Resolume's
+  composition data but never populated it. It now detects Resolume's
+  `Previewed` connection state.
+
+### Changed (Companion module)
+- Rewrote message handling to match ShowCall's real `status_update` payload
+  shape (`programClips`, `comp`, `bpm`, `connected`, `host`) instead of a
+  previously-invented shape with fake `opacity`/`volume`/`position`/`duration`
+  fields that ShowCall never actually sends.
+- **New `preset_style` (advanced) feedback**: looks up a preset by ID from the
+  live preset list on every update and applies its current label/color. This
+  means already-placed Stream Deck buttons stay accurate when a preset is
+  renamed or recolored in ShowCall - you don't have to re-drag it onto the
+  button again. Deleted presets show a greyed-out "(removed)" state instead of
+  silently going stale.
+- Removed actions/feedbacks that never worked because ShowCall has no
+  corresponding server support: `stop_clip`, `stop_layer`, `stop_column`,
+  `set_bpm`, `tap_tempo`, `adjust_layer_opacity`, `clip_opacity_level`,
+  `clip_position`, and the hardcoded "Scene Macro"/BPM preset buttons that
+  assumed preset IDs (`walkin`, `sermon`, etc.) that don't exist unless you
+  happen to have created presets with those exact IDs yourself.
+- Added `execute_macro` action for sending raw macro steps as JSON, matching
+  ShowCall's real `{type, layer, column, ms}` step format.
+- Added configurable **Layers**/**Columns** grid size in the connection config
+  (was hardcoded to 4 layers / 8 columns) so the generated clip-trigger button
+  grid and variables can match your actual composition size.
+- Cleaned up variables to only include values ShowCall can actually provide;
+  removed fabricated `composition_size` and per-column name variables that
+  were never populated with real data.
+
 ## [2.1.1] - 2026-02-15
 
 ### Fixed
